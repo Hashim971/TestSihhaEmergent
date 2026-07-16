@@ -13,6 +13,7 @@ import PillIdentify from "./pages/PillIdentify";
 import Medications from "./pages/Medications";
 import Dependents from "./pages/Dependents";
 import DoctorPortal from "./pages/DoctorPortal";
+import Settings from "./pages/Settings";
 
 export default function App() {
   return (
@@ -29,6 +30,7 @@ export default function App() {
             <Route path="/medications" element={<Medications />} />
             <Route path="/dependents" element={<Dependents />} />
             <Route path="/doctor" element={<DoctorPortal />} />
+            <Route path="/settings" element={<Settings />} />
           </Route>
         </Routes>
         <Toaster position="top-right" richColors />

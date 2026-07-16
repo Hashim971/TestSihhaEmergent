@@ -3,6 +3,7 @@ import { useNavigate, Navigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
+import YesNo from "../components/YesNo";
 import { Leaf, Check, ChevronLeft, ChevronRight, Activity } from "lucide-react";
 
 const STEPS = ["Account", "General", "Health History", "Medications", "Lifestyle"];
@@ -157,22 +158,22 @@ export default function Onboarding() {
                 desc="Include any chronic conditions or medical issues experienced. Essential for understanding health history and personalized care."
                 value={form.chronic_conditions} onChange={(v) => set("chronic_conditions", v)}
                 details={form.chronic_conditions_details} onDetails={(v) => set("chronic_conditions_details", v)}
-                placeholder="e.g. Type 2 diabetes, hypertension…" testid="chronic" />
+                placeholder="e.g. Type 2 diabetes, hypertension…" testid="onboarding-chronic" />
               <YesNo label="Family Health History"
                 desc="The family's health history can indicate genetic risks. Knowing this helps us predict and prevent potential health issues."
                 value={form.family_history} onChange={(v) => set("family_history", v)}
                 details={form.family_history_details} onDetails={(v) => set("family_history_details", v)}
-                placeholder="e.g. Father: heart disease…" testid="family" />
+                placeholder="e.g. Father: heart disease…" testid="onboarding-family" />
               <YesNo label="Allergies"
                 desc="Do you suffer from allergies to foods, medications, or other things?"
                 value={form.allergies} onChange={(v) => set("allergies", v)}
                 details={form.allergies_details} onDetails={(v) => set("allergies_details", v)}
-                placeholder="e.g. Penicillin, peanuts…" testid="allergies" />
+                placeholder="e.g. Penicillin, peanuts…" testid="onboarding-allergies" />
               <YesNo label="Surgical History"
                 desc="Include any surgical procedures done."
                 value={form.surgical_history} onChange={(v) => set("surgical_history", v)}
                 details={form.surgical_history_details} onDetails={(v) => set("surgical_history_details", v)}
-                placeholder="e.g. Appendectomy (2019)…" testid="surgical" />
+                placeholder="e.g. Appendectomy (2019)…" testid="onboarding-surgical" />
             </StepCard>
           )}
 
@@ -182,34 +183,34 @@ export default function Onboarding() {
                 desc="Medications that are taken on daily bases."
                 value={form.current_medications} onChange={(v) => set("current_medications", v)}
                 details={form.current_medications_details} onDetails={(v) => set("current_medications_details", v)}
-                placeholder="e.g. Metformin 500mg twice daily…" testid="current-meds" />
+                placeholder="e.g. Metformin 500mg twice daily…" testid="onboarding-current-meds" />
               <YesNo label="Medications Taken in the Last 6 Months"
                 desc="Such as antibiotics, pain relievers, antihistamines, or other medications."
                 value={form.recent_medications} onChange={(v) => set("recent_medications", v)}
                 details={form.recent_medications_details} onDetails={(v) => set("recent_medications_details", v)}
-                placeholder="e.g. Amoxicillin course in March…" testid="recent-meds" />
+                placeholder="e.g. Amoxicillin course in March…" testid="onboarding-recent-meds" />
             </StepCard>
           )}
 
           {step === 4 && (
             <StepCard title="Lifestyle Information">
-              <YesNo label="Do You Smoke?" value={form.smoker} onChange={(v) => set("smoker", v)} testid="smoker" />
+              <YesNo label="Do You Smoke?" value={form.smoker} onChange={(v) => set("smoker", v)} testid="onboarding-smoker" />
               <YesNo label="Dietary Habits" desc="Do you follow any specific dietary habits?"
                 value={form.dietary_habits} onChange={(v) => set("dietary_habits", v)}
                 details={form.dietary_habits_details} onDetails={(v) => set("dietary_habits_details", v)}
-                placeholder="e.g. Low-carb, intermittent fasting…" testid="diet" />
+                placeholder="e.g. Low-carb, intermittent fasting…" testid="onboarding-diet" />
               <YesNo label="Weekly Physical Activity Level" desc="Indicate the average level of physical activity performed each week."
                 value={form.physical_activity} onChange={(v) => set("physical_activity", v)}
                 details={form.physical_activity_details} onDetails={(v) => set("physical_activity_details", v)}
-                placeholder="e.g. Gym 3x per week, daily walks…" testid="activity" />
+                placeholder="e.g. Gym 3x per week, daily walks…" testid="onboarding-activity" />
               <YesNo label="Daily Sleep Pattern" desc="Indicate your typical sleep pattern each day."
                 value={form.sleep_pattern} onChange={(v) => set("sleep_pattern", v)}
                 details={form.sleep_pattern_details} onDetails={(v) => set("sleep_pattern_details", v)}
-                placeholder="e.g. 6-7 hours, trouble falling asleep…" testid="sleep" />
+                placeholder="e.g. 6-7 hours, trouble falling asleep…" testid="onboarding-sleep" />
               <YesNo label="Stress Level" desc="Indicate your average level of stress experienced."
                 value={form.stress_level} onChange={(v) => set("stress_level", v)}
                 details={form.stress_level_details} onDetails={(v) => set("stress_level_details", v)}
-                placeholder="e.g. High work stress lately…" testid="stress" />
+                placeholder="e.g. High work stress lately…" testid="onboarding-stress" />
             </StepCard>
           )}
 
@@ -249,32 +250,6 @@ function StepCard({ title, subtitle, children }) {
       {subtitle && <p className="text-ink-soft leading-relaxed mb-8">{subtitle}</p>}
       {!subtitle && <div className="mb-8" />}
       <div className="space-y-8">{children}</div>
-    </div>
-  );
-}
-
-function YesNo({ label, desc, value, onChange, details, onDetails, placeholder, testid }) {
-  return (
-    <div>
-      <p className="font-semibold">{label}</p>
-      {desc && <p className="text-sm text-ink-soft mt-1 leading-relaxed">{desc}</p>}
-      <div className="flex gap-3 mt-3">
-        {[["Yes", true], ["No", false]].map(([txt, val]) => (
-          <button key={txt} type="button" onClick={() => onChange(val)}
-            data-testid={`onboarding-${testid}-${txt.toLowerCase()}`}
-            className={`px-8 py-2 rounded-full text-sm font-medium border ${
-              value === val ? "bg-forest text-white border-forest" : "bg-sand text-ink-soft border-line hover:bg-white"
-            }`}
-            style={{ transition: "background-color 0.2s ease, color 0.2s ease" }}>
-            {txt}
-          </button>
-        ))}
-      </div>
-      {value === true && onDetails && (
-        <textarea value={details} onChange={(e) => onDetails(e.target.value)} placeholder={placeholder}
-          data-testid={`onboarding-${testid}-details`} rows={2}
-          className="mt-3 w-full border border-line rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest" />
-      )}
     </div>
   );
 }

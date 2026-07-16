@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import { toast } from "sonner";
 import {
   LayoutDashboard, MessageSquare, ScanLine, Pill, Users,
-  Stethoscope, Bell, LogOut, Leaf, ChevronDown, Share2,
+  Stethoscope, Bell, LogOut, Leaf, ChevronDown, Share2, Settings as SettingsIcon,
 } from "lucide-react";
 
 const navItems = [
@@ -14,6 +14,7 @@ const navItems = [
   { to: "/pill-id", label: "Pill ID", icon: ScanLine, testid: "nav-pill-id" },
   { to: "/medications", label: "Medications", icon: Pill, testid: "nav-medications" },
   { to: "/dependents", label: "Dependents", icon: Users, testid: "nav-dependents" },
+  { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
 ];
 
 export default function Layout() {
