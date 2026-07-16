@@ -8,7 +8,13 @@ import {
 // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
 const handleLogin = () => {
   const redirectUrl = window.location.origin + "/dashboard";
-  window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  const authUrl = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  // Google blocks sign-in inside iframes (e.g. preview panel) — navigate the top-level window
+  try {
+    window.top.location.href = authUrl;
+  } catch {
+    window.location.href = authUrl;
+  }
 };
 
 const features = [
