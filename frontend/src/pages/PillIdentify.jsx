@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
-import { Upload, ScanLine, AlertTriangle, CheckCircle2, Clock } from "lucide-react";
+import { Upload, ScanLine, AlertTriangle, CheckCircle2, Clock, ChevronDown } from "lucide-react";
 
 export default function PillIdentify() {
   const { activeProfile } = useAuth();
@@ -12,6 +12,7 @@ export default function PillIdentify() {
   const [cam, setCam] = useState(null);
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);
+  const [expandedId, setExpandedId] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef(null);
 
@@ -98,49 +99,7 @@ export default function PillIdentify() {
               <p className="text-ink-soft text-sm">Vision AI is analyzing your photo…</p>
             </div>
           )}
-          {result && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-2">
-                {result.identified ? <CheckCircle2 className="h-5 w-5 text-forest" /> : <AlertTriangle className="h-5 w-5 text-terracotta" />}
-                <h2 className="text-xl font-bold" data-testid="pill-result-name">
-                  {result.identified ? result.name : "Not identified"}
-                </h2>
-                {result.confidence && (
-                  <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded-full bg-sage/30 text-forest">
-                    {result.confidence} confidence
-                  </span>
-                )}
-                <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded-full bg-forest text-white" data-testid="pill-source-badge">
-                  {result.source === "cnn_classifier" ? "CNN Model" : "Vision AI"}
-                </span>
-              </div>
-              {result.generic_name && <p className="text-sm text-ink-soft">Generic: {result.generic_name}</p>}
-              {result.description && <Section title="Description" body={result.description} />}
-              {result.uses && <Section title="Uses" body={result.uses} />}
-              {result.dosage_info && <Section title="Dosage" body={result.dosage_info} />}
-              {result.side_effects?.length > 0 && (
-                <Section title="Side Effects" body={result.side_effects.join(" · ")} />
-              )}
-              {result.warnings?.length > 0 && (
-                <div className="border border-terracotta/40 bg-terracotta/5 rounded-xl p-4">
-                  <p className="text-xs uppercase tracking-[0.15em] font-bold text-terracotta mb-1">Warnings</p>
-                  <ul className="text-sm space-y-1">
-                    {result.warnings.map((w, i) => <li key={i}>• {w}</li>)}
-                  </ul>
-                </div>
-              )}
-              {!result.identified && result.reason && <Section title="Reason" body={result.reason} />}
-              {cam && (
-                <div>
-                  <p className="text-xs uppercase tracking-[0.15em] font-bold text-forest mb-2">Model Attention Map (Grad-CAM)</p>
-                  <img src={`data:image/webp;base64,${cam}`} alt="Class activation map"
-                    data-testid="pill-cam-image"
-                    className="rounded-xl border border-line max-h-48 object-contain" />
-                  <p className="text-xs text-ink-soft mt-1">Regions the classifier focused on to make its prediction.</p>
-                </div>
-              )}
-            </div>
-          )}
+          {result && <PillResultDetails result={result} cam={cam} />}
         </div>
       </div>
 
@@ -149,12 +108,77 @@ export default function PillIdentify() {
           <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><Clock className="h-4 w-4 text-forest" /> Recent Identifications</h3>
           <div className="space-y-2">
             {history.slice(0, 8).map((h) => (
-              <div key={h.pill_id} className="flex items-center justify-between border border-line rounded-lg px-4 py-3 text-sm">
-                <span className="font-medium">{h.result?.identified ? h.result.name : "Unidentified"}</span>
-                <span className="text-ink-soft text-xs">{new Date(h.created_at).toLocaleString()}</span>
+              <div key={h.pill_id} className="border border-line rounded-lg overflow-hidden">
+                <button
+                  onClick={() => setExpandedId(expandedId === h.pill_id ? null : h.pill_id)}
+                  data-testid={`pill-history-row-${h.pill_id}`}
+                  className="w-full flex items-center justify-between px-4 py-3 text-sm hover:bg-sand text-left"
+                  style={{ transition: "background-color 0.2s ease" }}
+                >
+                  <span className="font-medium flex items-center gap-2">
+                    <ChevronDown className={`h-4 w-4 text-ink-soft shrink-0 ${expandedId === h.pill_id ? "rotate-180" : ""}`}
+                      style={{ transition: "transform 0.2s ease" }} />
+                    {h.result?.identified ? h.result.name : "Unidentified"}
+                  </span>
+                  <span className="text-ink-soft text-xs">{new Date(h.created_at).toLocaleString()}</span>
+                </button>
+                {expandedId === h.pill_id && (
+                  <div className="border-t border-line px-5 py-5 bg-sand/50" data-testid={`pill-history-details-${h.pill_id}`}>
+                    <PillResultDetails result={h.result} cam={null} />
+                  </div>
+                )}
               </div>
             ))}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PillResultDetails({ result, cam }) {
+  if (!result) return <p className="text-sm text-ink-soft">No details stored for this entry.</p>;
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        {result.identified ? <CheckCircle2 className="h-5 w-5 text-forest" /> : <AlertTriangle className="h-5 w-5 text-terracotta" />}
+        <h2 className="text-xl font-bold" data-testid="pill-result-name">
+          {result.identified ? result.name : "Not identified"}
+        </h2>
+        {result.confidence && (
+          <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded-full bg-sage/30 text-forest">
+            {result.confidence} confidence
+          </span>
+        )}
+        {result.source && (
+          <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded-full bg-forest text-white" data-testid="pill-source-badge">
+            {result.source === "cnn_classifier" ? "CNN Model" : "Vision AI"}
+          </span>
+        )}
+      </div>
+      {result.generic_name && <p className="text-sm text-ink-soft">Generic: {result.generic_name}</p>}
+      {result.description && <Section title="Description" body={result.description} />}
+      {result.uses && <Section title="Uses" body={result.uses} />}
+      {result.dosage_info && <Section title="Dosage" body={result.dosage_info} />}
+      {result.side_effects?.length > 0 && (
+        <Section title="Side Effects" body={result.side_effects.join(" · ")} />
+      )}
+      {result.warnings?.length > 0 && (
+        <div className="border border-terracotta/40 bg-terracotta/5 rounded-xl p-4">
+          <p className="text-xs uppercase tracking-[0.15em] font-bold text-terracotta mb-1">Warnings</p>
+          <ul className="text-sm space-y-1">
+            {result.warnings.map((w, i) => <li key={i}>• {w}</li>)}
+          </ul>
+        </div>
+      )}
+      {!result.identified && result.reason && <Section title="Reason" body={result.reason} />}
+      {cam && (
+        <div>
+          <p className="text-xs uppercase tracking-[0.15em] font-bold text-forest mb-2">Model Attention Map (Grad-CAM)</p>
+          <img src={`data:image/webp;base64,${cam}`} alt="Class activation map"
+            data-testid="pill-cam-image"
+            className="rounded-xl border border-line max-h-48 object-contain" />
+          <p className="text-xs text-ink-soft mt-1">Regions the classifier focused on to make its prediction.</p>
         </div>
       )}
     </div>
