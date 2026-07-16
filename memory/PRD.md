@@ -18,6 +18,7 @@ Patent: System and Method for Real-Time Healthcare Management Using Multimodal D
 - Collections: users, user_sessions, dependents, vitals, alerts, chat_sessions, chat_messages, health_reports, pill_history, medications, dose_logs
 
 ## Implemented (June 2026 — MVP, tested 100% backend + frontend)
+- Post-signup onboarding wizard (5 steps: Account ✓ → General Info with height/weight/DOB + Gregorian/Hijri → Health History → Medications → Lifestyle, yes/no toggles with conditional detail fields, skip option). Stored as users.health_profile; AI chat + screening reports inject this profile into the system prompt (verified: chatbot recalls allergies/medications).
 - Google login, landing page, protected routes
 - Patient dashboard: vital cards (HR, BP, glucose, SpO2, temp), recharts trends, manual vitals entry, wearable simulation (7 days), out-of-range alert generation
 - AI Health Chat/Screening: SSE streaming GPT-5.5, one-question-at-a-time clinician prompt (from original repo), session history, PDF report download (jsPDF), reports stored

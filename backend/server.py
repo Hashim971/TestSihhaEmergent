@@ -176,6 +176,7 @@ async def register(body: RegisterRequest, response: Response):
         "picture": None,
         "role": "patient",
         "sharing_enabled": False,
+        "onboarding_completed": False,
         "created_at": iso(),
     })
     set_auth_cookies(response, create_access_token(user_id, email), create_refresh_token(user_id))
@@ -252,6 +253,7 @@ async def seed_and_index():
             "picture": None,
             "role": "doctor",
             "sharing_enabled": False,
+            "onboarding_completed": True,
             "created_at": iso(),
         })
     elif not existing.get("password_hash") or not verify_password(admin_password, existing["password_hash"]):
@@ -277,7 +279,89 @@ class SharingUpdate(BaseModel):
 @api.post("/auth/sharing")
 async def set_sharing(body: SharingUpdate, user=Depends(get_current_user)):
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"sharing_enabled": body.enabled}})
-    return await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    return await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION)
+
+
+# ---------- Health Profile (onboarding) ----------
+class HealthProfileUpdate(BaseModel):
+    skip: bool = False
+    height: Optional[float] = None
+    height_unit: str = "cm"
+    weight: Optional[float] = None
+    weight_unit: str = "kg"
+    date_of_birth: Optional[str] = None
+    calendar: str = "gregorian"
+    chronic_conditions: Optional[bool] = None
+    chronic_conditions_details: Optional[str] = None
+    family_history: Optional[bool] = None
+    family_history_details: Optional[str] = None
+    allergies: Optional[bool] = None
+    allergies_details: Optional[str] = None
+    surgical_history: Optional[bool] = None
+    surgical_history_details: Optional[str] = None
+    current_medications: Optional[bool] = None
+    current_medications_details: Optional[str] = None
+    recent_medications: Optional[bool] = None
+    recent_medications_details: Optional[str] = None
+    smoker: Optional[bool] = None
+    dietary_habits: Optional[bool] = None
+    dietary_habits_details: Optional[str] = None
+    physical_activity: Optional[bool] = None
+    physical_activity_details: Optional[str] = None
+    sleep_pattern: Optional[bool] = None
+    sleep_pattern_details: Optional[str] = None
+    stress_level: Optional[bool] = None
+    stress_level_details: Optional[str] = None
+
+
+@api.put("/profile/health")
+async def update_health_profile(body: HealthProfileUpdate, user=Depends(get_current_user)):
+    update = {"onboarding_completed": True}
+    if not body.skip:
+        profile = body.model_dump(exclude={"skip"})
+        profile["updated_at"] = iso()
+        update["health_profile"] = profile
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": update})
+    return await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION)
+
+
+def health_profile_context(user) -> str:
+    hp = user.get("health_profile")
+    if not hp:
+        return ""
+    lines = []
+    if hp.get("height"):
+        lines.append(f"Height: {hp['height']} {hp.get('height_unit', 'cm')}")
+    if hp.get("weight"):
+        lines.append(f"Weight: {hp['weight']} {hp.get('weight_unit', 'kg')}")
+    if hp.get("date_of_birth"):
+        lines.append(f"Date of birth: {hp['date_of_birth']} ({hp.get('calendar', 'gregorian')} calendar)")
+    yn = [
+        ("chronic_conditions", "Chronic/past health conditions"),
+        ("family_history", "Family health history of note"),
+        ("allergies", "Allergies (foods, medications, other)"),
+        ("surgical_history", "Surgical history"),
+        ("current_medications", "Currently taking daily medications"),
+        ("recent_medications", "Medications taken in the last 6 months"),
+        ("smoker", "Smoker"),
+        ("dietary_habits", "Follows specific dietary habits"),
+        ("physical_activity", "Regular weekly physical activity"),
+        ("sleep_pattern", "Consistent daily sleep pattern"),
+        ("stress_level", "Experiences notable stress"),
+    ]
+    for key, label in yn:
+        val = hp.get(key)
+        if val is None:
+            continue
+        detail = hp.get(f"{key}_details")
+        lines.append(f"{label}: {'Yes' if val else 'No'}" + (f" — {detail}" if val and detail else ""))
+    if not lines:
+        return ""
+    return (
+        "\n\nPatient health profile (collected during onboarding — use it to personalize questions, "
+        "risk assessment and advice; account for allergies and current medications before suggesting anything):\n- "
+        + "\n- ".join(lines)
+    )
 
 
 # ---------- Dependents ----------
@@ -509,7 +593,11 @@ async def send_chat_message(sid: str, body: ChatMessageIn, user=Depends(get_curr
 
     history = await db.chat_messages.find({"chat_session_id": sid}, {"_id": 0}).sort("created_at", 1).to_list(100)
     context = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history[:-1]][-30:])
-    system = SCREENING_SYSTEM_PROMPT + ("\n\nConversation so far:\n" + context if context else "")
+    system = SCREENING_SYSTEM_PROMPT
+    if session["profile_id"] == user["user_id"]:
+        system += health_profile_context(user)
+    if context:
+        system += "\n\nConversation so far:\n" + context
 
     chat = LlmChat(api_key=LLM_KEY, session_id=sid, system_message=system).with_model("openai", "gpt-5.5")
 

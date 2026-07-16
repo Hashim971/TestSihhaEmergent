@@ -14,5 +14,6 @@ export default function ProtectedRoute({ children }) {
     );
   }
   if (!user) return <Navigate to="/auth" replace />;
+  if (user.role === "patient" && user.onboarding_completed !== true) return <Navigate to="/onboarding" replace />;
   return children;
 }
