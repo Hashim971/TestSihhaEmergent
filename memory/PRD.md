@@ -8,7 +8,7 @@ Patent: System and Method for Real-Time Healthcare Management Using Multimodal D
 - Fresh full-stack rebuild: React + FastAPI + MongoDB (old Vite/Supabase/Firebase code preserved in /app/legacy)
 - Everything: core + dependents + doctor portal
 - AI: Emergent Universal LLM Key, GPT-5.5 text + vision; original system prompt from legacy healthAI.ts reused for screening chat
-- Auth: Emergent-managed Google social login
+- Auth: standard email/password JWT (replaced Google OAuth per user request, June 2026). Access token 15min + refresh 7d in httpOnly cookies, bcrypt hashing, brute-force lockout (5 fails/15min), seeded admin (admin@sihha.ai / Admin@123, role doctor). /auth page with login/signup tabs.
 - Vitals: manual entry + simulated wearable data
 
 ## Architecture

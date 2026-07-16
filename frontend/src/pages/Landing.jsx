@@ -1,21 +1,9 @@
 import React from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import {
   Leaf, MessageSquare, ScanLine, Pill, Activity, Users, Stethoscope, ArrowRight,
 } from "lucide-react";
-
-// REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-const handleLogin = () => {
-  const redirectUrl = window.location.origin + "/dashboard";
-  const authUrl = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
-  // Google blocks sign-in inside iframes (e.g. preview panel) — navigate the top-level window
-  try {
-    window.top.location.href = authUrl;
-  } catch {
-    window.location.href = authUrl;
-  }
-};
 
 const features = [
   { icon: MessageSquare, title: "AI Health Screening", desc: "A conversational symptom checker that asks the right questions, one at a time, and produces a professional screening report for your doctor." },
@@ -28,7 +16,9 @@ const features = [
 
 export default function Landing() {
   const { user, loading } = useAuth();
+  const navigate = useNavigate();
   if (!loading && user) return <Navigate to="/dashboard" replace />;
+  const handleLogin = () => navigate("/auth");
 
   return (
     <div className="min-h-screen bg-sand">
@@ -41,7 +31,7 @@ export default function Landing() {
             <span className="font-heading font-bold text-xl text-forest">Sihha AI</span>
           </div>
           <button onClick={handleLogin} data-testid="login-btn" className="btn-primary">
-            Sign in with Google
+            Sign In
           </button>
         </div>
       </header>

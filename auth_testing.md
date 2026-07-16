@@ -1,46 +1,30 @@
-# Auth Testing Playbook (Emergent Google Auth)
+# Auth Testing Playbook (JWT email/password)
 
-## Step 1: Create Test User & Session
-mongosh --eval "
-use('sihha_ai');
-var userId = 'test-user-' + Date.now();
-var sessionToken = 'test_session_' + Date.now();
-db.users.insertOne({
-  user_id: userId,
-  email: 'test.user.' + Date.now() + '@example.com',
-  name: 'Test User',
-  picture: 'https://via.placeholder.com/150',
-  role: 'patient',
-  sharing_enabled: false,
-  created_at: new Date().toISOString()
-});
-db.user_sessions.insertOne({
-  user_id: userId,
-  session_token: sessionToken,
-  expires_at: new Date(Date.now() + 7*24*60*60*1000).toISOString(),
-  created_at: new Date().toISOString()
-});
-print('Session token: ' + sessionToken);
-print('User ID: ' + userId);
-"
+Auth is standard email/password with JWT (access 15min + refresh 7d) in httpOnly cookies. Bearer access token also accepted.
 
-## Step 2: Test Backend API
-curl -X GET "$API_URL/api/auth/me" -H "Authorization: Bearer YOUR_SESSION_TOKEN"
+## Seeded admin (role: doctor)
+- email: admin@sihha.ai
+- password: Admin@123
 
-## Step 3: Browser Testing (set cookie)
-await page.context.add_cookies([{
-    "name": "session_token",
-    "value": "YOUR_SESSION_TOKEN",
-    "domain": "<preview-domain>",
-    "path": "/",
-    "httpOnly": true,
-    "secure": true,
-    "sameSite": "None"
-}]);
+## Step 1: MongoDB Verification
+mongosh
+use sihha_ai
+db.users.findOne({email: "admin@sihha.ai"}, {password_hash: 1})   // hash starts with $2b$
+db.users.getIndexes()   // unique index on email
 
-## Checklist
-- User document has user_id field (custom UUID)
-- Session user_id matches user's user_id
-- All queries exclude _id
-- /api/auth/me returns user data
-- Dashboard loads without redirect
+## Step 2: API Testing
+API_URL=$(grep REACT_APP_BACKEND_URL /app/frontend/.env | cut -d '=' -f2)
+# Register
+curl -c cookies.txt -X POST "$API_URL/api/auth/register" -H "Content-Type: application/json" -d '{"name":"Test User","email":"test@example.com","password":"test123"}'
+# Login
+curl -c cookies.txt -X POST "$API_URL/api/auth/login" -H "Content-Type: application/json" -d '{"email":"admin@sihha.ai","password":"Admin@123"}'
+# Me (cookie)
+curl -b cookies.txt "$API_URL/api/auth/me"
+# Refresh
+curl -b cookies.txt -c cookies.txt -X POST "$API_URL/api/auth/refresh"
+
+## Brute force
+5 failed logins for same ip+email → 429 lockout for 15 min (collection: login_attempts).
+
+## Browser Testing
+Go to /auth, use auth-tab-login / auth-tab-register, auth-input-name/email/password, auth-submit-btn. Errors shown in auth-error.

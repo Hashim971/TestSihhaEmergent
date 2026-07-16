@@ -1,15 +1,24 @@
 # Test Credentials — Sihha AI
 
-Auth is Emergent-managed Google OAuth (no app-managed passwords).
+Auth: standard email/password (JWT access 15min + refresh 7d, httpOnly cookies; Bearer access token also accepted).
 
-## Test session for automation (inserted in MongoDB, db: sihha_ai)
-- user_id: test-ui-1784235150842
-- session_token: test_ui_session_1784235150842 (expires ~7 days from 2026-06 test run)
-- Use as httpOnly cookie `session_token` on domain ab05f5cb-2f3a-4bd8-b2b4-33cfdc0ac6c8.preview.emergentagent.com, or `Authorization: Bearer <token>`
+## Seeded admin account (role: doctor — can access Doctor Portal)
+- email: admin@sihha.ai
+- password: Admin@123
 
-## Creating fresh test sessions
-See /app/auth_testing.md for the mongosh snippet (insert into users + user_sessions).
+## Test patient account
+- email: patient1@test.com
+- password: test123
+- role: patient
 
-## Roles
-- Users default to role=patient. POST /api/auth/role {"role":"doctor"} to switch (UI: toggle-role-btn).
-- Doctor portal lists patients with sharing_enabled=true (UI: toggle-sharing-btn).
+## Endpoints
+- POST /api/auth/register {name, email, password}
+- POST /api/auth/login {email, password}
+- GET /api/auth/me · POST /api/auth/refresh · POST /api/auth/logout
+- Brute force: 5 failed logins per ip+email → 15 min lockout (429)
+
+## UI
+- /auth page: auth-tab-login, auth-tab-register, auth-input-name/email/password, auth-submit-btn, auth-error
+- Role toggle: toggle-role-btn (sidebar). Sharing: toggle-sharing-btn.
+
+See /app/auth_testing.md for full test playbook.

@@ -5,7 +5,8 @@ import random
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-import httpx
+import bcrypt
+import jwt
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,76 +93,135 @@ def iso(dt=None):
     return (dt or now_utc()).isoformat()
 
 
-# ---------- Auth ----------
+# ---------- Auth (JWT email/password) ----------
+JWT_ALGORITHM = "HS256"
+JWT_SECRET = os.environ["JWT_SECRET"]
+USER_PROJECTION = {"_id": 0, "password_hash": 0}
+
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+
+
+def create_access_token(user_id: str, email: str) -> str:
+    payload = {"sub": user_id, "email": email, "type": "access",
+               "exp": datetime.now(timezone.utc) + timedelta(minutes=15)}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def create_refresh_token(user_id: str) -> str:
+    payload = {"sub": user_id, "type": "refresh",
+               "exp": datetime.now(timezone.utc) + timedelta(days=7)}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def set_auth_cookies(response: Response, access: str, refresh: str):
+    response.set_cookie("access_token", access, httponly=True, secure=True,
+                        samesite="lax", max_age=900, path="/")
+    response.set_cookie("refresh_token", refresh, httponly=True, secure=True,
+                        samesite="lax", max_age=604800, path="/")
+
+
 async def get_current_user(request: Request):
-    token = request.cookies.get("session_token")
+    token = request.cookies.get("access_token")
     if not token:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             token = auth[7:]
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
-    if not session:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    expires_at = session["expires_at"]
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < now_utc():
-        raise HTTPException(status_code=401, detail="Session expired")
-    user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    user = await db.users.find_one({"user_id": payload["sub"]}, USER_PROJECTION)
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     return user
 
 
-class SessionRequest(BaseModel):
-    session_id: str
+class RegisterRequest(BaseModel):
+    name: str = Field(min_length=1)
+    email: str
+    password: str = Field(min_length=6)
 
 
-@api.post("/auth/session")
-async def create_session(body: SessionRequest, response: Response):
-    async with httpx.AsyncClient() as hc:
-        r = await hc.get(
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": body.session_id},
-        )
-    if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Invalid session id")
-    data = r.json()
-    existing = await db.users.find_one({"email": data["email"]}, {"_id": 0})
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@api.post("/auth/register")
+async def register(body: RegisterRequest, response: Response):
+    email = body.email.strip().lower()
+    if "@" not in email or "." not in email:
+        raise HTTPException(status_code=400, detail="Invalid email address")
+    existing = await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1})
     if existing:
-        user_id = existing["user_id"]
-        await db.users.update_one(
-            {"user_id": user_id},
-            {"$set": {"name": data.get("name"), "picture": data.get("picture")}},
-        )
-    else:
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        await db.users.insert_one({
-            "user_id": user_id,
-            "email": data["email"],
-            "name": data.get("name"),
-            "picture": data.get("picture"),
-            "role": "patient",
-            "sharing_enabled": False,
-            "created_at": iso(),
-        })
-    session_token = data["session_token"]
-    await db.user_sessions.insert_one({
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    await db.users.insert_one({
         "user_id": user_id,
-        "session_token": session_token,
-        "expires_at": iso(now_utc() + timedelta(days=7)),
+        "email": email,
+        "name": body.name.strip(),
+        "password_hash": hash_password(body.password),
+        "picture": None,
+        "role": "patient",
+        "sharing_enabled": False,
         "created_at": iso(),
     })
-    response.set_cookie(
-        key="session_token", value=session_token, httponly=True,
-        secure=True, samesite="none", path="/", max_age=7 * 24 * 3600,
-    )
-    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    return user
+    set_auth_cookies(response, create_access_token(user_id, email), create_refresh_token(user_id))
+    return await db.users.find_one({"user_id": user_id}, USER_PROJECTION)
+
+
+@api.post("/auth/login")
+async def login(body: LoginRequest, request: Request, response: Response):
+    email = body.email.strip().lower()
+    identifier = f"{request.client.host}:{email}"
+    attempt = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
+    if attempt and attempt.get("locked_until"):
+        locked_until = datetime.fromisoformat(attempt["locked_until"])
+        if locked_until > now_utc():
+            raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 15 minutes.")
+    user = await db.users.find_one({"email": email})
+    if not user or not user.get("password_hash") or not verify_password(body.password, user["password_hash"]):
+        count = (attempt.get("count", 0) + 1) if attempt else 1
+        update = {"identifier": identifier, "count": count, "updated_at": iso()}
+        if count >= 5:
+            update["locked_until"] = iso(now_utc() + timedelta(minutes=15))
+            update["count"] = 0
+        await db.login_attempts.update_one({"identifier": identifier}, {"$set": update}, upsert=True)
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    await db.login_attempts.delete_one({"identifier": identifier})
+    set_auth_cookies(response, create_access_token(user["user_id"], email), create_refresh_token(user["user_id"]))
+    return await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION)
+
+
+@api.post("/auth/refresh")
+async def refresh_token(request: Request, response: Response):
+    token = request.cookies.get("refresh_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="No refresh token")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    user = await db.users.find_one({"user_id": payload["sub"]}, USER_PROJECTION)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    response.set_cookie("access_token", create_access_token(user["user_id"], user["email"]),
+                        httponly=True, secure=True, samesite="lax", max_age=900, path="/")
+    return {"ok": True}
 
 
 @api.get("/auth/me")
@@ -170,12 +230,32 @@ async def auth_me(user=Depends(get_current_user)):
 
 
 @api.post("/auth/logout")
-async def logout(request: Request, response: Response):
-    token = request.cookies.get("session_token")
-    if token:
-        await db.user_sessions.delete_one({"session_token": token})
-    response.delete_cookie("session_token", path="/")
+async def logout(response: Response):
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/")
     return {"ok": True}
+
+
+@app.on_event("startup")
+async def seed_and_index():
+    await db.users.create_index("email", unique=True)
+    await db.login_attempts.create_index("identifier")
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@sihha.ai").lower()
+    admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@123")
+    existing = await db.users.find_one({"email": admin_email})
+    if existing is None:
+        await db.users.insert_one({
+            "user_id": f"user_{uuid.uuid4().hex[:12]}",
+            "email": admin_email,
+            "name": "Dr. Admin",
+            "password_hash": hash_password(admin_password),
+            "picture": None,
+            "role": "doctor",
+            "sharing_enabled": False,
+            "created_at": iso(),
+        })
+    elif not existing.get("password_hash") or not verify_password(admin_password, existing["password_hash"]):
+        await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
 
 
 class RoleUpdate(BaseModel):
