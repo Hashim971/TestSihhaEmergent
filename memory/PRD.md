@@ -12,7 +12,7 @@ Patent: System and Method for Real-Time Healthcare Management Using Multimodal D
 - Vitals: manual entry + simulated wearable data
 
 ## Architecture
-- Backend: FastAPI (/app/backend/server.py), MongoDB (db: sihha_ai), emergentintegrations LlmChat (openai gpt-5.5)
+- Backend: FastAPI (/app/backend/server.py), MongoDB Atlas (cluster0.ntwaj1g.mongodb.net, db: sihha_ai — migrated from local MongoDB June 2026; connection in backend/.env MONGO_URL), emergentintegrations LlmChat (openai gpt-5.5)
 - Frontend: CRA + craco + Tailwind (Organic & Earthy design: sand/forest green/terracotta, Outfit + IBM Plex Sans)
 - Auth: Emergent Google OAuth, session_token httpOnly cookie (7d), Bearer fallback
 - Collections: users, user_sessions, dependents, vitals, alerts, chat_sessions, chat_messages, health_reports, pill_history, medications, dose_logs
