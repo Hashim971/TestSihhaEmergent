@@ -2,6 +2,9 @@ import os
 import json
 import uuid
 import random
+import base64
+import asyncio
+import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -16,6 +19,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
+from gradio_client import Client as GradioClient, handle_file
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -662,7 +666,31 @@ async def list_reports(user=Depends(get_current_user)):
     return await db.health_reports.find({"user_id": user["user_id"]}, {"_id": 0}).sort("generated_at", -1).to_list(50)
 
 
-# ---------- Pill Identification ----------
+# ---------- Pill Identification (HF Space CNN + LLM details) ----------
+HF_TOKEN = os.environ.get("HF_TOKEN")
+HF_PILLS_SPACE = os.environ.get("HF_PILLS_SPACE", "Hashim971/Pills-Classifier")
+_pills_client = None
+
+PILL_DETAILS_PROMPT = (
+    "You are a pharmaceutical information expert for the Sihha AI healthcare platform. "
+    "A CNN pill-classifier model has identified a medication from a photo. Given the predicted class name, "
+    "respond ONLY with strict JSON (no markdown fences) with keys: "
+    '"name" (string, proper medication name), "generic_name" (string), "description" (string), '
+    '"uses" (string), "dosage_info" (string), "side_effects" (array of strings), '
+    '"warnings" (array of strings). '
+    "Always include a warning that this is AI identification and a pharmacist should verify before taking anything. "
+    "If the class name is not a known medication, still describe what it most likely refers to."
+)
+
+
+def classify_pill_sync(image_path: str):
+    global _pills_client
+    if _pills_client is None:
+        _pills_client = GradioClient(HF_PILLS_SPACE, token=HF_TOKEN, verbose=False)
+    cam_path, label_raw = _pills_client.predict(image=handle_file(image_path), api_name="/predict")
+    return cam_path, label_raw
+
+
 class PillIdentifyRequest(BaseModel):
     image_base64: str
     profile_id: Optional[str] = None
@@ -670,22 +698,57 @@ class PillIdentifyRequest(BaseModel):
 
 @api.post("/pills/identify")
 async def identify_pill(body: PillIdentifyRequest, user=Depends(get_current_user)):
-    chat = LlmChat(
-        api_key=LLM_KEY, session_id=f"pill_{uuid.uuid4().hex[:8]}", system_message=PILL_ID_PROMPT
-    ).with_model("openai", "gpt-5.5")
-    img = ImageContent(image_base64=body.image_base64)
-    result = await chat.send_message(UserMessage(
-        text="Identify this medication and return the JSON.", file_contents=[img]
-    ))
-    text = result.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
+    parsed, cam_b64, label = None, None, None
+    tmp_path = None
     try:
-        parsed = json.loads(text.strip())
+        raw = base64.b64decode(body.image_base64)
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(raw)
+            tmp_path = f.name
+        cam_path, label_raw = await asyncio.wait_for(asyncio.to_thread(classify_pill_sync, tmp_path), timeout=120)
+        label = label_raw.replace("Predicted Class:", "").strip()
+        try:
+            with open(cam_path, "rb") as cf:
+                cam_b64 = base64.b64encode(cf.read()).decode()
+        except Exception:
+            cam_b64 = None
     except Exception:
-        parsed = {"identified": False, "reason": "Could not parse AI response", "raw": result}
+        global _pills_client
+        _pills_client = None
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    if label:
+        chat = LlmChat(
+            api_key=LLM_KEY, session_id=f"pill_{uuid.uuid4().hex[:8]}", system_message=PILL_DETAILS_PROMPT
+        ).with_model("openai", "gpt-5.5")
+        result = await chat.send_message(UserMessage(
+            text=f"The pill classifier predicted the class: '{label}'. Return the JSON."
+        ))
+        parsed = parse_llm_json(result)
+        if parsed is not None:
+            parsed["identified"] = True
+            parsed["name"] = parsed.get("name") or label
+        else:
+            parsed = {"identified": True, "name": label}
+        parsed["classifier_label"] = label
+        parsed["source"] = "cnn_classifier"
+    else:
+        # Fallback: GPT-5.5 vision if the HF Space is unreachable
+        chat = LlmChat(
+            api_key=LLM_KEY, session_id=f"pill_{uuid.uuid4().hex[:8]}", system_message=PILL_ID_PROMPT
+        ).with_model("openai", "gpt-5.5")
+        img = ImageContent(image_base64=body.image_base64)
+        result = await chat.send_message(UserMessage(
+            text="Identify this medication and return the JSON.", file_contents=[img]
+        ))
+        parsed = parse_llm_json(result) or {"identified": False, "reason": "Could not parse AI response", "raw": result}
+        parsed["source"] = "vision_fallback"
+
     record = {
         "pill_id": f"pill_{uuid.uuid4().hex[:12]}",
         "user_id": user["user_id"],
@@ -695,7 +758,20 @@ async def identify_pill(body: PillIdentifyRequest, user=Depends(get_current_user
     }
     await db.pill_history.insert_one(record)
     record.pop("_id", None)
+    record["cam_image_base64"] = cam_b64
     return record
+
+
+def parse_llm_json(text: str):
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    try:
+        return json.loads(text.strip())
+    except Exception:
+        return None
 
 
 @api.get("/pills/history")

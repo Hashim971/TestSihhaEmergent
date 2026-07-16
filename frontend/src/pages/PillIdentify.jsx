@@ -9,6 +9,7 @@ export default function PillIdentify() {
   const [preview, setPreview] = useState(null);
   const [base64, setBase64] = useState(null);
   const [result, setResult] = useState(null);
+  const [cam, setCam] = useState(null);
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);
   const [dragOver, setDragOver] = useState(false);
@@ -37,6 +38,7 @@ export default function PillIdentify() {
     try {
       const res = await api.post("/pills/identify", { image_base64: base64, profile_id: activeProfile.id });
       setResult(res.data.result);
+      setCam(res.data.cam_image_base64 || null);
       loadHistory();
     } catch {
       toast.error("Identification failed. Try again.");
@@ -108,6 +110,9 @@ export default function PillIdentify() {
                     {result.confidence} confidence
                   </span>
                 )}
+                <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-1 rounded-full bg-forest text-white" data-testid="pill-source-badge">
+                  {result.source === "cnn_classifier" ? "CNN Model" : "Vision AI"}
+                </span>
               </div>
               {result.generic_name && <p className="text-sm text-ink-soft">Generic: {result.generic_name}</p>}
               {result.description && <Section title="Description" body={result.description} />}
@@ -125,6 +130,15 @@ export default function PillIdentify() {
                 </div>
               )}
               {!result.identified && result.reason && <Section title="Reason" body={result.reason} />}
+              {cam && (
+                <div>
+                  <p className="text-xs uppercase tracking-[0.15em] font-bold text-forest mb-2">Model Attention Map (Grad-CAM)</p>
+                  <img src={`data:image/webp;base64,${cam}`} alt="Class activation map"
+                    data-testid="pill-cam-image"
+                    className="rounded-xl border border-line max-h-48 object-contain" />
+                  <p className="text-xs text-ink-soft mt-1">Regions the classifier focused on to make its prediction.</p>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -23,7 +23,7 @@ Patent: System and Method for Real-Time Healthcare Management Using Multimodal D
 - Google login, landing page, protected routes
 - Patient dashboard: vital cards (HR, BP, glucose, SpO2, temp), recharts trends, manual vitals entry, wearable simulation (7 days), out-of-range alert generation
 - AI Health Chat/Screening: SSE streaming GPT-5.5, one-question-at-a-time clinician prompt (from original repo), session history, PDF report download (jsPDF), reports stored
-- Pill Identification: photo upload → GPT-5.5 vision → structured result (name, uses, dosage, side effects, warnings, confidence), history
+- Pill Identification: photo upload → user's own HuggingFace Space CNN (Hashim971/Pills-Classifier via gradio_client, HF_TOKEN in backend/.env) predicts class + Grad-CAM attention map → GPT-5.5 generates details (uses, dosage, side effects, warnings); GPT-5.5 vision as fallback if Space is down. Frontend shows CNN Model badge + Grad-CAM image. (Updated June 2026)
 - Medications: CRUD, daily schedule, dose taken/missed logging, missed-dose alerts, adherence stats
 - Dependents: family profiles CRUD, profile switcher scoping vitals/meds/chat
 - Doctor portal: role toggle, patient sharing opt-in, shared patient list with unread alerts, patient summary (vitals chart, alerts, meds, adherence, screening reports)
