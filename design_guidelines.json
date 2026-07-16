@@ -1,0 +1,99 @@
+{
+  "theme": "Light theme preferred. Medical applications require high trust, cleanliness, and clear readability. The 'Organic & Earthy' archetype is chosen to create a reassuring, grounded experience avoiding clinical sterility.",
+  "typography": {
+    "headings": {
+      "fontFamily": "Outfit, sans-serif",
+      "weights": ["400", "500", "700"],
+      "strategy": "Approachable yet authoritative. Use tracking-tight for all headings. DO NOT use generic sans like Inter for headings."
+    },
+    "body": {
+      "fontFamily": "IBM Plex Sans, sans-serif",
+      "weights": ["400", "500", "600"],
+      "strategy": "High legibility, especially optimized for biometric data, charts, numbers, and medical reports."
+    },
+    "scale": {
+      "h1": "text-4xl md:text-5xl lg:text-6xl tracking-tight leading-none",
+      "h2": "text-2xl md:text-3xl lg:text-4xl tracking-tight",
+      "h3": "text-xl md:text-2xl",
+      "body": "text-base leading-relaxed",
+      "labels": "text-xs uppercase tracking-[0.2em]"
+    }
+  },
+  "colors": {
+    "archetype": "Organic & Earthy (Trust, Calm, Clarity)",
+    "palette": {
+      "background": "#FBFBF9",
+      "surface": "#FFFFFF",
+      "primary": "#1E3F2A",
+      "primaryHover": "#2C5A3D",
+      "accent": "#B1D8B7",
+      "alert": "#E06D53",
+      "textPrimary": "#1A1A1A",
+      "textSecondary": "#525252",
+      "border": "#E5E4E2"
+    },
+    "strategy": "Avoid standard 'SaaS blue' or clinical sterile palettes. Ground the user with warm sand tones and deep forest green. Use terracotta for missed dose alerts or critical vitals."
+  },
+  "visual_enhancers": {
+    "surfaces": "Flat Solid surfaces. NO glassmorphism for health data to prevent visual refraction of crucial medical information. Use crisp 1px borders (border-[#E5E4E2]) with subtle ambient shadows (shadow-sm).",
+    "borders": "Rounded-xl for main data cards, pill-shaped (rounded-full) for primary call-to-action buttons. Ensure concentric nested radii.",
+    "icons": "lucide-react for standard dashboard navigation, dependents avatars, and actions. NEVER use emojis as icons.",
+    "header": "Solid or semi-solid background (e.g., bg-white/90 backdrop-blur-md) with border-b. CRITICAL: DO NOT use complete transparent background in header or overlays."
+  },
+  "grids_and_layouts": {
+    "dashboard": "High Density Grid (grid-cols-1 md:grid-cols-3 lg:grid-cols-4) for Doctor Portal and Patient Dashboard. Tight gaps (gap-4 or gap-6). Span primary charts across 2-3 columns.",
+    "landing": "Bento Grid Protocol. Asymmetrical, grid-cols-1 md:grid-cols-12 with wide gaps (gap-8) for marketing sections.",
+    "spacing": "Generous Spacing Philosophy. Use p-6 or p-8 inside cards to avoid text collision and provide breathing room."
+  },
+  "motion": {
+    "interactions": "Hover states on all interactive elements (e.g., translate-y-[-2px], shadow-md, darken background).",
+    "transitions": "Use specific properties (transition: transform 0.2s ease, opacity 0.2s ease). CRITICAL: DO NOT use 'transition: all'.",
+    "chat": "Smooth staggered entrance for AI Health Chat messages. Typing indicator animations.",
+    "accessibility": "Respect prefers-reduced-motion."
+  },
+  "accessibility": {
+    "contrast": "APCA contrast calculator standards. Minimum 4.5:1 for normal text.",
+    "testing": "All interactive and key informational elements MUST include a data-testid attribute (e.g., data-testid='upload-pill-btn', data-testid='login-submit-button').",
+    "forms": "Clear error states and high-contrast focus rings (focus:ring-2 focus:ring-primary focus:ring-offset-2)."
+  },
+  "components": {
+    "general": "Use .js and .jsx files for all components. Rely on Shadcn UI primitives customized via Tailwind.",
+    "chat_interface": "Custom implementation leveraging Shadcn ScrollArea. Stream UI for AI medical advice with a prominent 'Download Report' button.",
+    "pill_identification": "Drag-and-drop zone for photo upload. Card overlay to display AI-identified pill details and instructions.",
+    "charts": "Shadcn Chart / Recharts for biometric trend charts. Ensure color-blind-friendly palettes for data lines.",
+    "toasts": "Use Sonner (located at /app/src/components/ui/sonner.js if applicable) for missed dose alerts and dose confirmations.",
+    "calendars": "Shadcn Calendar for Medication schedule and adherence tracking.",
+    "dependents_management": "Avatar lists and profile cards with clear hierarchy for switching active patient profiles."
+  },
+  "media": {
+    "strategy": "Use real human moments for the landing page, clean high-contrast UI for the medical portal.",
+    "image_urls": {
+      "hero_landing": {
+        "url": "https://images.unsplash.com/photo-1666886573531-48d2e3c2b684?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTJ8MHwxfHNlYXJjaHwzfHxtb2Rlcm4lMjBoZWFsdGhjYXJlJTIwcGF0aWVudCUyMGRvY3RvcnxlbnwwfHx8fDE3ODQyMzQyNzZ8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Doctor showing a patient something on the tablet - representing modern AI healthcare integration for the landing page."
+      },
+      "pill_placeholder": {
+        "url": "https://images.unsplash.com/photo-1607874963930-2edecc67a25a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNDR8MHwxfHNlYXJjaHwxfHxtZWRpY2luZSUyMHBpbGxzJTIwb24lMjBoYW5kfGVufDB8fHx8MTc4NDIzNDI3Nnww&ixlib=rb-4.1.0&q=85",
+        "description": "Pills on hand - to be used as a visual placeholder or background for the pill identification upload feature."
+      }
+    }
+  },
+  "instructions_to_main_agent": [
+    "You have .js files, NOT .tsx files. Write all frontend logic using modern Javascript (ES6+) and React JSX.",
+    "Prioritize using pre-existing components from src/components/ui before building custom ones.",
+    "Build the dashboard using Recharts for vitals and biometric trends. Layout data densely but clearly.",
+    "For the AI Chat, ensure clear distinction between User and AI messages, and include an option to 'Download Report'.",
+    "Implement the doctor portal with data tables showing patient alerts and adherence reports.",
+    "Adhere strictly to the 'Organic & Earthy' color palette. DO NOT fallback to default Tailwind/Vercel styling.",
+    "Ensure all interactive elements have data-testid attributes for testing."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Do not converge toward generic AI slop. Create layered depth with appropriate styling.",
+    "Never use dark colors as gradients. Keep surfaces solid and grounded.",
+    "Never apply universal transitions (transition: all). Use specific properties.",
+    "Do not center align the app container (.App { text-align: center; }). It disrupts reading flow.",
+    "Never use AI emojis (🤖🧠) for icons. Use lucide-react exclusively for vector iconography.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Ensure every header, dropdown, or overlay has a solid or blurred background. NEVER use complete transparent backgrounds over content."
+  ]
+}
