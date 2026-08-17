@@ -39,7 +39,7 @@ Everything is built on a single FastAPI backend and a single-page React frontend
 - **5-step onboarding wizard**: general info (height, weight, DOB with Gregorian/Hijri), health history, medications, lifestyle. Data injected into every AI interaction.
 - **Settings page** to edit the health profile at any time; AI picks up changes on the next message.
 - **AI Health Chat & Screening** — GPT-5.5 with SSE streaming, one-question-at-a-time clinician prompt, session history, PDF report download (jsPDF).
-- **Pill Identification** — upload a photo → user's HuggingFace CNN Space (`Hashim971/Pills-Classifier`) predicts the class and returns a Grad-CAM attention map → GPT-5.5 fills in uses, dosage, side effects and warnings. GPT-5.5 Vision fallback if the Space is down. Expandable identification history so users can re-read past results.
+- **Pill Identification** — upload a photo → user's HuggingFace CNN Space (`Hashim971/Tessihha`) predicts the class and returns a Grad-CAM attention map → GPT-5.5 fills in uses, dosage, side effects and warnings. GPT-5.5 Vision fallback if the Space is down. Expandable identification history so users can re-read past results.
 - **Vitals tracking** — manual entry + simulated wearable stream (HR, BP, glucose, SpO₂, temperature), recharts trends, automatic out-of-range alert generation.
 - **Medications** — CRUD, daily schedule, dose taken/missed logging, adherence stats, missed-dose alerts.
 - **Dependents** — full CRUD for family members with a profile switcher that scopes vitals, meds and chat.
@@ -245,7 +245,7 @@ All timestamps are `datetime.now(timezone.utc)`.
 | Service | Purpose | Notes |
 |---|---|---|
 | **Emergent Universal LLM Key** | GPT-5.5 text + vision via `emergentintegrations.LlmChat` | Used for chat, screening reports, pill detail generation and vision fallback. |
-| **HuggingFace Gradio Space** | `Hashim971/Pills-Classifier` CNN + Grad-CAM | Called via `gradio_client` with `HF_TOKEN`. |
+| **HuggingFace Gradio Space** | `Hashim971/Tessihha` CNN + Grad-CAM | Called via `gradio_client` with `HF_TOKEN`. API: `/classify_pill`. |
 | **MongoDB Atlas** | Managed database | Cluster `cluster0.ntwaj1g.mongodb.net`, db `sihha_ai`. |
 
 ---

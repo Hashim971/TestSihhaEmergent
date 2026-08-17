@@ -668,7 +668,7 @@ async def list_reports(user=Depends(get_current_user)):
 
 # ---------- Pill Identification (HF Space CNN + LLM details) ----------
 HF_TOKEN = os.environ.get("HF_TOKEN")
-HF_PILLS_SPACE = os.environ.get("HF_PILLS_SPACE", "Hashim971/Pills-Classifier")
+HF_PILLS_SPACE = os.environ.get("HF_PILLS_SPACE", "Hashim971/Tessihha")
 _pills_client = None
 
 PILL_DETAILS_PROMPT = (
@@ -687,7 +687,7 @@ def classify_pill_sync(image_path: str):
     global _pills_client
     if _pills_client is None:
         _pills_client = GradioClient(HF_PILLS_SPACE, token=HF_TOKEN, verbose=False)
-    cam_path, label_raw = _pills_client.predict(image=handle_file(image_path), api_name="/predict")
+    cam_path, label_raw = _pills_client.predict(image=handle_file(image_path), api_name="/classify_pill")
     return cam_path, label_raw
 
 
