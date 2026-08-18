@@ -29,6 +29,22 @@ Patent: System and Method for Real-Time Healthcare Management Using Multimodal D
 - Doctor portal: role toggle, patient sharing opt-in, shared patient list with unread alerts, patient summary (vitals chart, alerts, meds, adherence, screening reports)
 - Alerts bell with unread count + mark-read
 
+## Phase Plan (from user artifact `Emergent_Prompts_v2_Code_Grounded.md`, June 2026)
+Strict ADDITIVE-ONLY contract: no refactors, no renames, no new npm/pip packages, no touching /app/legacy.
+- Phase 0 — Security fixes: DONE (June 2026)
+- Phase 1 — Agent runtime + Pre-Visit Briefing Agent + interactive follow-up (encounters, agent_runs, clinical_artifacts, briefing_threads, DoctorSchedule.jsx, EncounterDetail.jsx): PENDING
+- Phase 2 — Intake Agent (intake_forms, Intake.jsx wizard): PENDING
+- Phase 3 — Clinical Scribe, Arabic-first (Transcriber protocol + stub provider, SOAP notes, consent gate): PENDING
+- Phase 4 — Coding Agent, NPHIES/ICD-10-AM FHIR R4 (signed notes only): PENDING
+- Phase 5 — Triage Agent (deterministic red-flag rules before LLM, feature-flagged off): PENDING
+- Phase 6 — Pharmacy Marketplace (independent track; compliance.py, refill.py, handoff + in_app fulfilment): PENDING
+
+## Phase 0 — Security fixes (completed June 2026, 7/7 tests pass)
+- `password_hash` no longer leaks: `POST /api/auth/role`, `GET /api/doctor/patients`, `GET /api/doctor/patients/{id}/summary` now use `USER_PROJECTION`. Audited all other `db.users` queries (login line 199 intentionally keeps the hash internally).
+- Self-promotion to doctor gated behind `ALLOW_SELF_ROLE_CHANGE` (default `false` → 403 "Role changes are administered, not self-service."). Set to `true` in backend/.env for dev so the Layout role toggle still works; frontend now catches 403 and shows a sonner error.
+- CORS default changed from `*` to `http://localhost:3000`; app raises a startup RuntimeError if `CORS_ORIGINS` contains `*` while credentials are enabled. (Note: the k8s ingress adds its own `access-control-allow-origin: *` header on the public URL — app-level behaviour verified against localhost:8001.)
+- Regression tests appended to `/app/backend/tests/backend_test.py`: `TestNoPasswordHashLeak`, `TestSelfRoleChangeGate`, `TestCorsNotWildcard`.
+
 ## Backlog
 - P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)

@@ -358,3 +358,87 @@ class TestPills:
         r = requests.get(f"{API}/pills/history", headers=h(patient_session["token"]))
         assert r.status_code == 200
         assert isinstance(r.json(), list) and len(r.json()) >= 1
+
+
+
+# ---------- Phase 0: security regressions (JWT auth) ----------
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@sihha.ai")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@123")
+SELF_ROLE_ALLOWED = os.environ.get("ALLOW_SELF_ROLE_CHANGE", "false").lower() == "true"
+
+
+@pytest.fixture(scope="module")
+def jwt_patient(mongo_db):
+    """Register a real JWT patient with sharing enabled."""
+    email = f"TEST_sec_{uuid.uuid4().hex[:8]}@example.com"
+    s = requests.Session()
+    r = s.post(f"{API}/auth/register", json={"name": "Sec Patient", "email": email, "password": "Passw0rd!"})
+    assert r.status_code == 200, r.text
+    user = r.json()
+    s.post(f"{API}/auth/sharing", json={"enabled": True})
+    yield {"session": s, "user_id": user["user_id"], "email": email}
+    mongo_db.users.delete_one({"user_id": user["user_id"]})
+
+
+@pytest.fixture(scope="module")
+def jwt_doctor():
+    s = requests.Session()
+    r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+    assert r.status_code == 200, r.text
+    assert r.json()["role"] == "doctor"
+    return s
+
+
+class TestNoPasswordHashLeak:
+    def test_role_endpoint(self, jwt_patient):
+        r = jwt_patient["session"].post(f"{API}/auth/role", json={"role": "patient"})
+        if SELF_ROLE_ALLOWED:
+            assert r.status_code == 200, r.text
+            assert "password_hash" not in r.json()
+        else:
+            assert r.status_code == 403
+            assert r.json()["detail"] == "Role changes are administered, not self-service."
+        assert "password_hash" not in r.text
+
+    def test_doctor_patients(self, jwt_doctor, jwt_patient):
+        r = jwt_doctor.get(f"{API}/doctor/patients")
+        assert r.status_code == 200, r.text
+        assert "password_hash" not in r.text
+        for p in r.json():
+            assert "password_hash" not in p
+            assert "_id" not in p
+
+    def test_doctor_patient_summary(self, jwt_doctor, jwt_patient):
+        r = jwt_doctor.get(f"{API}/doctor/patients/{jwt_patient['user_id']}/summary")
+        assert r.status_code == 200, r.text
+        assert "password_hash" not in r.text
+        assert "password_hash" not in r.json()["patient"]
+
+    def test_auth_me_clean(self, jwt_patient):
+        r = jwt_patient["session"].get(f"{API}/auth/me")
+        assert r.status_code == 200
+        assert "password_hash" not in r.json()
+
+
+class TestSelfRoleChangeGate:
+    def test_gate_matches_env_flag(self, jwt_patient):
+        r = jwt_patient["session"].post(f"{API}/auth/role", json={"role": "doctor"})
+        assert r.status_code == (200 if SELF_ROLE_ALLOWED else 403)
+        if SELF_ROLE_ALLOWED:
+            # restore the patient role so later runs are unaffected
+            jwt_patient["session"].post(f"{API}/auth/role", json={"role": "patient"})
+
+
+class TestCorsNotWildcard:
+    """Asserted against the app directly — the ingress proxy rewrites CORS headers."""
+    LOCAL = "http://localhost:8001/api/"
+
+    def test_unlisted_origin_is_not_allowed(self):
+        r = requests.get(self.LOCAL, headers={"Origin": "https://evil.example"})
+        assert r.headers.get("access-control-allow-origin") != "*"
+        assert "access-control-allow-origin" not in {k.lower() for k in r.headers}
+
+    def test_listed_origin_is_echoed(self):
+        origin = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")[0].strip()
+        r = requests.get(self.LOCAL, headers={"Origin": origin})
+        assert r.headers.get("access-control-allow-origin") == origin

@@ -42,10 +42,18 @@ export default function Layout() {
 
   const toggleRole = async () => {
     const newRole = user.role === "doctor" ? "patient" : "doctor";
-    const res = await api.post("/auth/role", { role: newRole });
-    setUser(res.data);
-    toast.success(`Switched to ${newRole} view`);
-    navigate(newRole === "doctor" ? "/doctor" : "/dashboard");
+    try {
+      const res = await api.post("/auth/role", { role: newRole });
+      setUser(res.data);
+      toast.success(`Switched to ${newRole} view`);
+      navigate(newRole === "doctor" ? "/doctor" : "/dashboard");
+    } catch (e) {
+      if (e?.response?.status === 403) {
+        toast.error("Role changes are managed by an administrator.");
+      } else {
+        toast.error("Could not switch role");
+      }
+    }
   };
 
   const toggleSharing = async () => {

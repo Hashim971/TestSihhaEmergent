@@ -264,16 +264,21 @@ async def seed_and_index():
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
 
 
+ALLOW_SELF_ROLE_CHANGE = os.environ.get("ALLOW_SELF_ROLE_CHANGE", "false").lower() == "true"
+
+
 class RoleUpdate(BaseModel):
     role: str
 
 
 @api.post("/auth/role")
 async def set_role(body: RoleUpdate, user=Depends(get_current_user)):
+    if not ALLOW_SELF_ROLE_CHANGE:
+        raise HTTPException(status_code=403, detail="Role changes are administered, not self-service.")
     if body.role not in ("patient", "doctor"):
         raise HTTPException(status_code=400, detail="Invalid role")
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"role": body.role}})
-    return await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    return await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION)
 
 
 class SharingUpdate(BaseModel):
@@ -906,7 +911,7 @@ async def require_doctor(user=Depends(get_current_user)):
 
 @api.get("/doctor/patients")
 async def doctor_patients(user=Depends(require_doctor)):
-    patients = await db.users.find({"sharing_enabled": True, "role": "patient"}, {"_id": 0}).to_list(200)
+    patients = await db.users.find({"sharing_enabled": True, "role": "patient"}, USER_PROJECTION).to_list(200)
     out = []
     for p in patients:
         alerts = await db.alerts.count_documents({"user_id": p["user_id"], "read": False})
@@ -916,7 +921,7 @@ async def doctor_patients(user=Depends(require_doctor)):
 
 @api.get("/doctor/patients/{patient_id}/summary")
 async def doctor_patient_summary(patient_id: str, user=Depends(require_doctor)):
-    patient = await db.users.find_one({"user_id": patient_id, "sharing_enabled": True}, {"_id": 0})
+    patient = await db.users.find_one({"user_id": patient_id, "sharing_enabled": True}, USER_PROJECTION)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found or not sharing")
     vitals = await db.vitals.find({"profile_id": patient_id}, {"_id": 0}).sort("recorded_at", -1).to_list(30)
@@ -944,9 +949,16 @@ async def root():
 
 
 app.include_router(api)
+
+CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+if "*" in CORS_ORIGINS:
+    raise RuntimeError(
+        "CORS_ORIGINS must not contain '*' while credentials are enabled — list explicit origins."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
