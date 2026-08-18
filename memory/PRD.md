@@ -69,6 +69,16 @@ adherence 92/62/97%), 5 encounters. Credentials in `/app/memory/test_credentials
 Tests: `/app/backend/tests/test_phase1_agents.py` — 16 pass (incl. 403 cases, low-confidence empty record,
 edit persistence, sign→409, audit integrity, vitals-id citations, three refusal cases).
 Frontend testing agent: 12/12 flows pass (`/app/test_reports/iteration_2.json`).
+## Bug fix — doctor portal showed only seeded patients (June 2026)
+Reported: "the doctor profile is not fetching real patient data — 2 users with screening reports did not show up."
+Root cause: `/api/doctor/patients` filters on `sharing_enabled: True` and registration created users with
+`sharing_enabled: False`, so real users (hashim@gmail.com, hhisham@gmail.com) were invisible. Data access was fine.
+Fix (user chose consent-on-by-default): registration now sets `sharing_enabled: True`; existing patients
+backfilled by the one-off `backend/migrations/enable_sharing_default.py` (9 switched on); patients can still opt out
+from the sidebar toggle and disappear from the portal when they do. Screening reports stay visible to doctors.
+Also fixed as follow-up: `_decorate_encounters` N+1 lookups (GET /api/encounters 15-18s → ~1s) and a loading
+skeleton on /doctor/schedule so the empty state no longer flashes. Verified by the testing agent —
+`/app/test_reports/iteration_3.json`, 100% backend and frontend.
 
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)

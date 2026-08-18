@@ -1,0 +1,39 @@
+{
+  "summary": "Verified the consent-by-default bug fix end-to-end. Backend and frontend both confirm: (1) admin@sihha.ai's Doctor Portal now lists 12 real patients including Hashim (user_55bcab760e0e) and HAshim (user_12b9f8145e27); (2) Hashim's summary returns exactly 1 screening report with empty vitals/medications and the UI renders the real MEDICAL SCREENING REPORT text (~5.9KB) inside data-testid=patient-reports; (3) Omar Farouk detail still renders adherence 90.7%, Lisinopril/Aspirin, and heart-rate chart SVG; (4) POST /api/auth/register now returns sharing_enabled: true and the new user immediately shows up in /api/doctor/patients (13/12 total); (5) UI sidebar toggle-sharing-btn reads 'Sharing: ON' for a fresh registration and flips to 'Share with Doctors' on opt-out, after which the patient disappears from the doctor portal; (6) dr.layla@sihha.ai /doctor/schedule renders 22-23 encounter rows with SIGNED / NOT GENERATED briefing badges and the new-encounter patient dropdown lists 12 real patients (Hashim, HAshim, Omar, Noura, Sami, etc). No password_hash is ever exposed. Cleaned up 3 test users created during registration testing.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/encounters", "issue": "Slow response (~15-18s) when hydrating briefings for Layla's 22 encounters — decorate_encounters likely does N+1 lookups. Frontend schedule page therefore appears empty for ~15s after a hard page reload."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Doctor Schedule initial load", "issue": "On hard reload of /doctor/schedule the page shows the empty-state ('No encounters scheduled yet.') for ~15s while /api/encounters is still loading. There is no loading skeleton/spinner, so it looks broken. Same slow path also causes the new-encounter patient dropdown to remain empty until /api/doctor/patients resolves.", "affected_selectors": ["[data-testid=encounters-list]", "[data-testid=encounter-patient-select]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase1_agents.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/phase1.xml"
+  ],
+  "action_items": [
+    "Consider adding a loading state (skeleton/spinner) on /doctor/schedule and /doctor while /api/encounters and /api/doctor/patients are in flight so the empty-state copy is not shown prematurely.",
+    "Consider optimising the /api/encounters decorate step (single aggregation vs per-encounter briefing lookups) — currently ~15-18s for 22 encounters on the remote Atlas cluster."
+  ],
+  "critical_code_review_comments": [
+    "server.py doctor_patients / doctor_patient_summary correctly project USER_PROJECTION so password_hash is never leaked — verified by grep and by JSON dump of the response.",
+    "server.py register(): sharing_enabled=True default is correctly applied and returned in the response body (verified via curl).",
+    "DoctorSchedule.jsx uses Promise.all([encounters, doctor/patients]) — if one endpoint 401s during the auth-refresh cycle both states remain empty. Consider decoupling the two loads so a slow /encounters doesn't leave the patient dropdown empty.",
+    "test_phase1_agents.py collection requires REACT_APP_BACKEND_URL / MONGO_URL / DB_NAME in the process env — currently it fails to collect under pytest unless the caller re-exports them from backend/.env. Consider adding a conftest.py that loads /app/backend/.env for tests."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@sihha.ai / Admin@123 (doctor), dr.layla@sihha.ai / Doctor@123, omar/noura/sami.patient@sihha.ai / Patient@123. Real users hashim@gmail.com and hhisham@gmail.com left untouched.",
+  "seed_data_creation": "Registered 3 throw-away 'testshare.*@test.com' patients via UI and API during signup verification and deleted them from the sihha_ai.users collection after testing.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All 6 review-request flows pass. The only follow-up worth noting is the slow /api/encounters endpoint (~15-18s for Layla's 22 encounters) which makes the /doctor/schedule page look empty on first load until it finally resolves — use waits of >=20s when polling for encounter-row-* selectors after a hard nav, or trigger the same route via a sidebar SPA click after warming up. Doctor Portal /doctor loads in ~4s. Do NOT run /app/backend/seed_phase1.py (creates duplicate encounters, ~8 min). If you need to run the Phase 1 pytest suite, export REACT_APP_BACKEND_URL, MONGO_URL and DB_NAME from /app/backend/.env and /app/frontend/.env first — the current test module reads them via os.environ[...] without a fallback.",
+  "rca of the issue": "GET /api/doctor/patients filters on sharing_enabled=True. Historically POST /api/auth/register created users with sharing_enabled=False, so the two real users (hashim@gmail.com, hhisham@gmail.com) were invisible to the doctor. The main-agent fix set the default to True at registration (server.py ~L187) plus a one-off migration (backend/migrations/enable_sharing_default.py) that backfilled existing patients. Verified: admin now sees 12 patients (up from the previous 5 seeded ones) and both real users are present with their screening reports. Reproduction pre-fix: register a patient, no sharing_enabled toggle set → doctor list omits them. Post-fix: same flow yields sharing_enabled=true in the register response and the patient is immediately queryable via /api/doctor/patients."
+}

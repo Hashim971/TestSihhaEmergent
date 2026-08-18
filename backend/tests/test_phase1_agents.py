@@ -75,6 +75,7 @@ class TestEncounters:
         s = requests.Session()
         u = s.post(f"{API}/auth/register", json={"name": "No Share", "email": email, "password": "Passw0rd!"},
                    timeout=60).json()
+        s.post(f"{API}/auth/sharing", json={"enabled": False}, timeout=60)
         try:
             r = ds.post(f"{API}/encounters", json={"patient_user_id": u["user_id"]}, timeout=60)
             assert r.status_code == 403

@@ -19,11 +19,16 @@ export default function DoctorSchedule() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ patient_user_id: "", scheduled_at: "", reason_for_visit: "" });
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const load = async () => {
-    const [e, p] = await Promise.all([api.get("/encounters"), api.get("/doctor/patients")]);
-    setEncounters(e.data);
-    setPatients(p.data);
+    api.get("/doctor/patients").then((p) => setPatients(p.data)).catch(() => {});
+    try {
+      const e = await api.get("/encounters");
+      setEncounters(e.data);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -119,7 +124,18 @@ export default function DoctorSchedule() {
       )}
 
       <div className="space-y-3" data-testid="encounters-list">
-        {encounters.length === 0 && (
+        {loading && (
+          <div className="space-y-3" data-testid="encounters-loading">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="card p-5 flex items-center gap-4">
+                <div className="h-8 w-24 bg-sand rounded-lg" />
+                <div className="flex-1 h-4 bg-sand rounded-full" />
+                <div className="h-5 w-20 bg-sand rounded-full" />
+              </div>
+            ))}
+          </div>
+        )}
+        {!loading && encounters.length === 0 && (
           <div className="card p-10 text-center">
             <p className="text-ink-soft">
               No encounters scheduled yet. Create one for a patient who has opted in to share their data.

@@ -184,7 +184,7 @@ async def register(body: RegisterRequest, response: Response):
         "password_hash": hash_password(body.password),
         "picture": None,
         "role": "patient",
-        "sharing_enabled": False,
+        "sharing_enabled": True,
         "onboarding_completed": False,
         "created_at": iso(),
     })
@@ -1023,21 +1023,23 @@ async def create_encounter(body: EncounterCreate, user=Depends(get_current_user)
 
 
 async def _decorate_encounters(encounters):
-    out = []
-    for enc in encounters:
-        patient = await db.users.find_one({"user_id": enc["patient_user_id"]}, USER_PROJECTION)
-        doctor = await db.users.find_one({"user_id": enc["doctor_user_id"]}, USER_PROJECTION)
-        artifact = await db.clinical_artifacts.find_one(
-            {"encounter_id": enc["encounter_id"], "artifact_type": "previsit_brief"},
-            {"_id": 0, "artifact_id": 1, "status": 1},
-        )
-        out.append({
-            **enc,
-            "patient_name": (patient or {}).get("name"),
-            "doctor_name": (doctor or {}).get("name"),
-            "briefing": artifact,
-        })
-    return out
+    if not encounters:
+        return []
+    user_ids = {e["patient_user_id"] for e in encounters} | {e["doctor_user_id"] for e in encounters}
+    enc_ids = [e["encounter_id"] for e in encounters]
+    users = await db.users.find({"user_id": {"$in": list(user_ids)}}, USER_PROJECTION).to_list(400)
+    artifacts = await db.clinical_artifacts.find(
+        {"encounter_id": {"$in": enc_ids}, "artifact_type": "previsit_brief"},
+        {"_id": 0, "artifact_id": 1, "status": 1, "encounter_id": 1},
+    ).to_list(400)
+    names = {u["user_id"]: u.get("name") for u in users}
+    briefings = {a["encounter_id"]: {"artifact_id": a["artifact_id"], "status": a["status"]} for a in artifacts}
+    return [{
+        **enc,
+        "patient_name": names.get(enc["patient_user_id"]),
+        "doctor_name": names.get(enc["doctor_user_id"]),
+        "briefing": briefings.get(enc["encounter_id"]),
+    } for enc in encounters]
 
 
 @api.get("/encounters")
