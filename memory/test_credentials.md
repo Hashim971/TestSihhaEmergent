@@ -1,24 +1,16 @@
-# Test Credentials — Sihha AI
+# Sihha AI — Test Credentials
 
-Auth: standard email/password (JWT access 15min + refresh 7d, httpOnly cookies; Bearer access token also accepted).
+All accounts use standard email/password JWT auth (httpOnly cookies).
 
-## Seeded admin account (role: doctor — can access Doctor Portal)
-- email: admin@sihha.ai
-- password: Admin@123
+## Admin / seeded doctor
+- `admin@sihha.ai` / `Admin@123` — role: doctor (seeded by `seed_and_index()` from backend/.env)
 
-## Test patient account
-- email: patient1@test.com
-- password: test123
-- role: patient
+## Phase 1 seeded accounts (`cd /app/backend && python seed_phase1.py`)
+- `dr.layla@sihha.ai` / `Doctor@123` — doctor, owns the 5 seeded encounters
+- `omar.patient@sihha.ai` / `Patient@123` — patient, hypertensive, 90 days vitals + 2 meds, sharing ON
+- `noura.patient@sihha.ai` / `Patient@123` — patient, diabetic, low adherence (~62%), sharing ON
+- `sami.patient@sihha.ai` / `Patient@123` — patient, stable, sharing ON
 
-## Endpoints
-- POST /api/auth/register {name, email, password}
-- POST /api/auth/login {email, password}
-- GET /api/auth/me · POST /api/auth/refresh · POST /api/auth/logout
-- Brute force: 5 failed logins per ip+email → 15 min lockout (429)
-
-## UI
-- /auth page: auth-tab-login, auth-tab-register, auth-input-name/email/password, auth-submit-btn, auth-error
-- Role toggle: toggle-role-btn (sidebar). Sharing: toggle-sharing-btn.
-
-See /app/auth_testing.md for full test playbook.
+## Notes
+- `ALLOW_SELF_ROLE_CHANGE=true` in backend/.env, so the sidebar role toggle works in dev.
+- Any account created via `POST /api/auth/register` starts as `patient` with `sharing_enabled: false`.

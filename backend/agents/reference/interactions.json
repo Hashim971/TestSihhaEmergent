@@ -1,0 +1,26 @@
+{
+  "source": "Sihha AI static interaction reference table (chronic disease management subset)",
+  "version": "v1",
+  "pairs": [
+    {"drug_a": "warfarin", "drug_b": "aspirin", "severity": "major", "note": "Reference table lists an increased bleeding risk for this pair."},
+    {"drug_a": "warfarin", "drug_b": "ibuprofen", "severity": "major", "note": "Reference table lists an increased gastrointestinal bleeding risk for this pair."},
+    {"drug_a": "warfarin", "drug_b": "amiodarone", "severity": "major", "note": "Reference table lists raised anticoagulant exposure for this pair."},
+    {"drug_a": "metformin", "drug_b": "furosemide", "severity": "moderate", "note": "Reference table lists altered metformin levels for this pair."},
+    {"drug_a": "metformin", "drug_b": "prednisone", "severity": "moderate", "note": "Reference table lists reduced glycaemic control for this pair."},
+    {"drug_a": "insulin", "drug_b": "metoprolol", "severity": "moderate", "note": "Reference table lists masked hypoglycaemia symptoms for this pair."},
+    {"drug_a": "lisinopril", "drug_b": "spironolactone", "severity": "major", "note": "Reference table lists an increased potassium risk for this pair."},
+    {"drug_a": "lisinopril", "drug_b": "ibuprofen", "severity": "moderate", "note": "Reference table lists reduced antihypertensive effect for this pair."},
+    {"drug_a": "amlodipine", "drug_b": "simvastatin", "severity": "moderate", "note": "Reference table lists raised statin exposure for this pair."},
+    {"drug_a": "clopidogrel", "drug_b": "omeprazole", "severity": "moderate", "note": "Reference table lists reduced clopidogrel activation for this pair."},
+    {"drug_a": "levothyroxine", "drug_b": "calcium", "severity": "moderate", "note": "Reference table lists reduced levothyroxine absorption for this pair."},
+    {"drug_a": "levothyroxine", "drug_b": "omeprazole", "severity": "minor", "note": "Reference table lists variable levothyroxine absorption for this pair."},
+    {"drug_a": "digoxin", "drug_b": "furosemide", "severity": "major", "note": "Reference table lists electrolyte-driven digoxin toxicity risk for this pair."},
+    {"drug_a": "simvastatin", "drug_b": "clarithromycin", "severity": "major", "note": "Reference table lists an increased myopathy risk for this pair."},
+    {"drug_a": "sertraline", "drug_b": "tramadol", "severity": "major", "note": "Reference table lists a serotonin syndrome risk for this pair."},
+    {"drug_a": "metoprolol", "drug_b": "verapamil", "severity": "major", "note": "Reference table lists additive bradycardia risk for this pair."},
+    {"drug_a": "atorvastatin", "drug_b": "gemfibrozil", "severity": "major", "note": "Reference table lists an increased myopathy risk for this pair."},
+    {"drug_a": "allopurinol", "drug_b": "azathioprine", "severity": "major", "note": "Reference table lists raised azathioprine toxicity for this pair."},
+    {"drug_a": "aspirin", "drug_b": "ibuprofen", "severity": "moderate", "note": "Reference table lists reduced antiplatelet effect for this pair."},
+    {"drug_a": "empagliflozin", "drug_b": "furosemide", "severity": "moderate", "note": "Reference table lists an increased volume depletion risk for this pair."}
+  ]
+}

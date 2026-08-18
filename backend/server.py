@@ -21,6 +21,11 @@ from typing import Optional, List
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
 from gradio_client import Client as GradioClient, handle_file
 
+from agents import tools as agent_tools
+from agents.runner import run_agent, AgentRunFailed
+from agents.previsit import PreVisitBriefingAgent
+from agents.briefing_qa import BriefingQAAgent
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
@@ -245,6 +250,11 @@ async def logout(response: Response):
 async def seed_and_index():
     await db.users.create_index("email", unique=True)
     await db.login_attempts.create_index("identifier")
+    await db.encounters.create_index([("doctor_user_id", 1), ("scheduled_at", -1)])
+    await db.encounters.create_index([("patient_user_id", 1), ("scheduled_at", -1)])
+    await db.agent_runs.create_index([("patient_user_id", 1), ("created_at", -1)])
+    await db.clinical_artifacts.create_index("encounter_id")
+    await db.briefing_threads.create_index("artifact_id", unique=True)
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@sihha.ai").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@123")
     existing = await db.users.find_one({"email": admin_email})
@@ -941,6 +951,316 @@ async def doctor_patient_summary(patient_id: str, user=Depends(require_doctor)):
         "adherence": {"taken": taken, "missed": missed, "total": total,
                       "rate": round(taken / total * 100, 1) if total else None},
     }
+
+
+# ---------- Clinical Agents: Encounters, Pre-Visit Briefings, Artifacts ----------
+PREVISIT_AGENT = PreVisitBriefingAgent()
+BRIEFING_QA_AGENT = BriefingQAAgent()
+
+
+async def assert_doctor_can_access_patient(db, doctor, patient_user_id: str):
+    """Single gate for every doctor-facing clinical route. Doctor-patient assignment lands here later."""
+    patient = await db.users.find_one(
+        {"user_id": patient_user_id, "sharing_enabled": True}, USER_PROJECTION
+    )
+    if not patient:
+        raise HTTPException(status_code=403, detail="Patient not found or not sharing data")
+    return patient
+
+
+def _agent_http_error(exc: AgentRunFailed):
+    if exc.status == "timeout":
+        return HTTPException(status_code=504, detail="The agent timed out. Try again.")
+    return HTTPException(status_code=502, detail=f"Agent run failed: {exc.message}")
+
+
+class EncounterCreate(BaseModel):
+    patient_user_id: Optional[str] = None
+    doctor_user_id: Optional[str] = None
+    profile_id: Optional[str] = None
+    scheduled_at: Optional[str] = None
+    reason_for_visit: str = ""
+
+
+class EncounterUpdate(BaseModel):
+    status: Optional[str] = None
+    scheduled_at: Optional[str] = None
+    reason_for_visit: Optional[str] = None
+
+
+@api.post("/encounters")
+async def create_encounter(body: EncounterCreate, user=Depends(get_current_user)):
+    if user.get("role") == "doctor":
+        if not body.patient_user_id:
+            raise HTTPException(status_code=400, detail="patient_user_id is required")
+        patient = await assert_doctor_can_access_patient(db, user, body.patient_user_id)
+        patient_user_id, doctor_user_id = body.patient_user_id, user["user_id"]
+        profile_id = body.profile_id or patient["user_id"]
+    else:
+        if not body.doctor_user_id:
+            raise HTTPException(status_code=400, detail="doctor_user_id is required")
+        doctor = await db.users.find_one({"user_id": body.doctor_user_id, "role": "doctor"}, USER_PROJECTION)
+        if not doctor:
+            raise HTTPException(status_code=404, detail="Doctor not found")
+        patient_user_id, doctor_user_id = user["user_id"], body.doctor_user_id
+        profile_id = profile_key(user, body.profile_id)
+
+    encounter = {
+        "encounter_id": f"enc_{uuid.uuid4().hex[:12]}",
+        "patient_user_id": patient_user_id,
+        "profile_id": profile_id,
+        "doctor_user_id": doctor_user_id,
+        "scheduled_at": body.scheduled_at or iso(),
+        "started_at": None,
+        "ended_at": None,
+        "status": "scheduled",
+        "reason_for_visit": body.reason_for_visit,
+        "created_at": iso(),
+        "updated_at": iso(),
+    }
+    await db.encounters.insert_one(dict(encounter))
+    return encounter
+
+
+async def _decorate_encounters(encounters):
+    out = []
+    for enc in encounters:
+        patient = await db.users.find_one({"user_id": enc["patient_user_id"]}, USER_PROJECTION)
+        doctor = await db.users.find_one({"user_id": enc["doctor_user_id"]}, USER_PROJECTION)
+        artifact = await db.clinical_artifacts.find_one(
+            {"encounter_id": enc["encounter_id"], "artifact_type": "previsit_brief"},
+            {"_id": 0, "artifact_id": 1, "status": 1},
+        )
+        out.append({
+            **enc,
+            "patient_name": (patient or {}).get("name"),
+            "doctor_name": (doctor or {}).get("name"),
+            "briefing": artifact,
+        })
+    return out
+
+
+@api.get("/encounters")
+async def list_encounters(user=Depends(get_current_user)):
+    field = "doctor_user_id" if user.get("role") == "doctor" else "patient_user_id"
+    encounters = await db.encounters.find({field: user["user_id"]}, {"_id": 0}).sort("scheduled_at", -1).to_list(200)
+    return await _decorate_encounters(encounters)
+
+
+@api.get("/encounters/{encounter_id}")
+async def get_encounter(encounter_id: str, user=Depends(get_current_user)):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    if user["user_id"] not in (enc["patient_user_id"], enc["doctor_user_id"]):
+        raise HTTPException(status_code=403, detail="Not a participant in this encounter")
+    patient = await db.users.find_one({"user_id": enc["patient_user_id"]}, USER_PROJECTION)
+    artifact = None
+    if user.get("role") == "doctor":
+        artifact = await db.clinical_artifacts.find_one(
+            {"encounter_id": encounter_id, "artifact_type": "previsit_brief"}, {"_id": 0}
+        )
+    return {"encounter": enc, "patient": patient, "artifact": artifact}
+
+
+@api.patch("/encounters/{encounter_id}")
+async def update_encounter(encounter_id: str, body: EncounterUpdate, user=Depends(require_doctor)):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    await assert_doctor_can_access_patient(db, user, enc["patient_user_id"])
+    update = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    if "status" in update:
+        if update["status"] not in ("scheduled", "in_progress", "completed", "cancelled"):
+            raise HTTPException(status_code=400, detail="Invalid status")
+        if update["status"] == "in_progress" and not enc.get("started_at"):
+            update["started_at"] = iso()
+        if update["status"] == "completed":
+            update["ended_at"] = iso()
+    update["updated_at"] = iso()
+    await db.encounters.update_one({"encounter_id": encounter_id}, {"$set": update})
+    return await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+
+
+@api.post("/agents/previsit/{encounter_id}")
+async def generate_previsit_brief(encounter_id: str, user=Depends(require_doctor)):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    await assert_doctor_can_access_patient(db, user, enc["patient_user_id"])
+
+    try:
+        content, run_id = await run_agent(
+            db, PREVISIT_AGENT,
+            patient_user_id=enc["patient_user_id"],
+            encounter_id=encounter_id,
+            invoked_by=user["user_id"],
+            profile_id=enc["profile_id"],
+            encounter=enc,
+        )
+    except AgentRunFailed as exc:
+        raise _agent_http_error(exc)
+
+    reference_flags, _ = await agent_tools.get_interaction_flags(db, enc["profile_id"])
+    artifact = {
+        "artifact_id": f"art_{uuid.uuid4().hex[:12]}",
+        "artifact_type": "previsit_brief",
+        "encounter_id": encounter_id,
+        "patient_user_id": enc["patient_user_id"],
+        "doctor_user_id": user["user_id"],
+        "content": content,
+        "edited_content": None,
+        "reference_flags": reference_flags,
+        "status": "draft",
+        "signed_by": None,
+        "signed_at": None,
+        "agent_run_id": run_id,
+        "created_at": iso(),
+        "updated_at": iso(),
+    }
+    await db.clinical_artifacts.insert_one(dict(artifact))
+    await db.agent_runs.update_one(
+        {"agent_run_id": run_id},
+        {"$set": {"output_ref": {"collection": "clinical_artifacts", "id": artifact["artifact_id"]}}},
+    )
+    return artifact
+
+
+async def _load_artifact_for_doctor(artifact_id: str, doctor):
+    artifact = await db.clinical_artifacts.find_one({"artifact_id": artifact_id}, {"_id": 0})
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    await assert_doctor_can_access_patient(db, doctor, artifact["patient_user_id"])
+    return artifact
+
+
+class ArtifactUpdate(BaseModel):
+    edited_content: dict
+
+
+@api.get("/artifacts/{artifact_id}")
+async def get_artifact(artifact_id: str, user=Depends(require_doctor)):
+    artifact = await _load_artifact_for_doctor(artifact_id, user)
+    await db.agent_runs.update_one(
+        {"agent_run_id": artifact["agent_run_id"], "human_action": "none"},
+        {"$set": {"human_action": "viewed", "human_action_at": iso()}},
+    )
+    return artifact
+
+
+@api.patch("/artifacts/{artifact_id}")
+async def update_artifact(artifact_id: str, body: ArtifactUpdate, user=Depends(require_doctor)):
+    artifact = await _load_artifact_for_doctor(artifact_id, user)
+    if artifact["status"] == "signed":
+        raise HTTPException(status_code=409, detail="Artifact is signed and cannot be modified")
+    await db.clinical_artifacts.update_one(
+        {"artifact_id": artifact_id},
+        {"$set": {"edited_content": body.edited_content, "status": "reviewed", "updated_at": iso()}},
+    )
+    await db.agent_runs.update_one(
+        {"agent_run_id": artifact["agent_run_id"]},
+        {"$set": {"human_action": "edited", "human_action_at": iso()}},
+    )
+    return await db.clinical_artifacts.find_one({"artifact_id": artifact_id}, {"_id": 0})
+
+
+@api.post("/artifacts/{artifact_id}/sign")
+async def sign_artifact(artifact_id: str, user=Depends(require_doctor)):
+    artifact = await _load_artifact_for_doctor(artifact_id, user)
+    if artifact["status"] == "signed":
+        raise HTTPException(status_code=409, detail="Artifact is already signed")
+    await db.clinical_artifacts.update_one(
+        {"artifact_id": artifact_id},
+        {"$set": {"status": "signed", "signed_by": user["user_id"], "signed_at": iso(), "updated_at": iso()}},
+    )
+    await db.agent_runs.update_one(
+        {"agent_run_id": artifact["agent_run_id"]},
+        {"$set": {"human_action": "approved", "human_action_at": iso()}},
+    )
+    return await db.clinical_artifacts.find_one({"artifact_id": artifact_id}, {"_id": 0})
+
+
+class ThreadMessageIn(BaseModel):
+    question: str = Field(min_length=1)
+
+
+@api.get("/artifacts/{artifact_id}/thread")
+async def get_briefing_thread(artifact_id: str, user=Depends(require_doctor)):
+    artifact = await _load_artifact_for_doctor(artifact_id, user)
+    thread = await db.briefing_threads.find_one({"artifact_id": artifact_id}, {"_id": 0})
+    return thread or {"artifact_id": artifact_id, "encounter_id": artifact["encounter_id"], "messages": []}
+
+
+@api.post("/artifacts/{artifact_id}/thread")
+async def ask_briefing_question(artifact_id: str, body: ThreadMessageIn, user=Depends(require_doctor)):
+    artifact = await _load_artifact_for_doctor(artifact_id, user)
+    enc = await db.encounters.find_one({"encounter_id": artifact["encounter_id"]}, {"_id": 0})
+    thread = await db.briefing_threads.find_one({"artifact_id": artifact_id}, {"_id": 0})
+    if not thread:
+        thread = {
+            "thread_id": f"thr_{uuid.uuid4().hex[:12]}",
+            "artifact_id": artifact_id,
+            "encounter_id": artifact["encounter_id"],
+            "patient_user_id": artifact["patient_user_id"],
+            "doctor_user_id": user["user_id"],
+            "messages": [],
+            "created_at": iso(),
+            "updated_at": iso(),
+        }
+        await db.briefing_threads.insert_one(dict(thread))
+
+    doctor_msg = {
+        "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+        "role": "doctor",
+        "content": body.question,
+        "cited_records": [],
+        "refused": False,
+        "refusal_reason": None,
+        "agent_run_id": None,
+        "created_at": iso(),
+    }
+
+    try:
+        answer, run_id = await run_agent(
+            db, BRIEFING_QA_AGENT,
+            patient_user_id=artifact["patient_user_id"],
+            encounter_id=artifact["encounter_id"],
+            invoked_by=user["user_id"],
+            profile_id=(enc or {}).get("profile_id") or artifact["patient_user_id"],
+            artifact=artifact,
+            question=body.question,
+            history=thread["messages"],
+        )
+    except AgentRunFailed as exc:
+        raise _agent_http_error(exc)
+
+    assistant_msg = {
+        "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+        "role": "assistant",
+        "content": answer.get("answer") or "",
+        "cited_records": answer.get("cited_records") or [],
+        "refused": bool(answer.get("refused")),
+        "refusal_reason": answer.get("refusal_reason"),
+        "agent_run_id": run_id,
+        "created_at": iso(),
+    }
+    await db.briefing_threads.update_one(
+        {"artifact_id": artifact_id},
+        {"$push": {"messages": {"$each": [doctor_msg, assistant_msg]}}, "$set": {"updated_at": iso()}},
+    )
+    return await db.briefing_threads.find_one({"artifact_id": artifact_id}, {"_id": 0})
+
+
+@api.get("/agents/runs")
+async def list_agent_runs(limit: int = Query(50, le=200), skip: int = 0,
+                          patient_user_id: Optional[str] = None, user=Depends(require_doctor)):
+    query = {"invoked_by_user_id": user["user_id"]}
+    if patient_user_id:
+        await assert_doctor_can_access_patient(db, user, patient_user_id)
+        query["patient_user_id"] = patient_user_id
+    total = await db.agent_runs.count_documents(query)
+    runs = await db.agent_runs.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).to_list(limit)
+    return {"total": total, "limit": limit, "skip": skip, "runs": runs}
 
 
 @api.get("/")
