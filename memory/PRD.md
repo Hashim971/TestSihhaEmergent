@@ -137,6 +137,32 @@ schedule lookups were taking whichever came first, so a regenerated briefing cou
 can no longer self-switch to the patient role while patients are assigned to them (409) — that had silently
 orphaned Dr. Layla's panel during a test run.
 
+## Screening findings — screening as citable briefing evidence (June 2026)
+The AI screening now feeds the briefing the way intake does, in six parts:
+1. `agents/screening.py` + `prompts/screening_extract_v1.md` — a `ScreeningExtractionAgent` turns each report into
+   `findings: [{finding_id, symptom, onset, duration, severity, patient_words, source_message_ids, report_id}]`,
+   verbatim patient quotes only, transcript message ids validated against the DB, no diagnostic labels. Runs
+   automatically inside `POST /api/chat/sessions/{sid}/report` (never fails the report) and on demand via
+   `POST /api/doctor/reports/{report_id}/findings`. Re-extraction reuses the previous `finding_id` for a matching
+   symptom so citations in existing briefings never dangle.
+2. `PUT /api/reports/{report_id}/share` — the patient links a screening to a specific upcoming visit
+   (`shared_encounter_id`, `shared_at`); the briefing gives that report precedence.
+3. `tools.get_symptom_timeline()` groups findings by symptom across 180 days → "reported 3 times since 12 May".
+4. Staleness: reports older than 90 days are flagged `stale` and the prompt must not present them as current.
+5. Intake prompt bumped to `intake_v2.md` — it receives the findings and asks follow-ups instead of re-asking.
+6. `GET /api/doctor/screening/{encounter_id}` — reports with findings, transcript excerpts, timeline; rendered by
+   `components/ScreeningCard.jsx` (expandable findings, transcript excerpts, "Ask about this" into the follow-up
+   thread, shared/stale badges) and inline under each concern via `screening_refs` in `ConcernsCard`.
+Briefing prompt is now `previsit_v4.md` (v1-v3 retained for audit); `ChiefConcern` gained `screening_refs`.
+Patient side: `components/ShareScreeningCard.jsx` in Health Chat, hydrated from `GET /api/reports` so a report
+stays shareable after a reload. A hint appears next to Regenerate when a screening is shared after the briefing
+was written (same pattern as intake).
+Migration `migrations/backfill_screening_findings.py` structured the pre-existing reports (idempotent).
+Hardening: `ALLOW_SELF_ROLE_CHANGE=false` and the sidebar role toggle is admin-only — self-promotion had twice
+flipped seeded patients into doctors and corrupted panel data during test runs.
+Tests: `/app/backend/tests/test_screening_findings.py` — 12 pass; frontend testing agent 9/9
+(`/app/test_reports/iteration_6.json`).
+
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)
 - P2: Voice input, body-map symptom input, notification email/SMS, counterfeit pill detection, real wearable integrations

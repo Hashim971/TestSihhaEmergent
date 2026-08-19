@@ -1,6 +1,6 @@
 import React from "react";
 import { LineChart, Line, ResponsiveContainer } from "recharts";
-import { AlertTriangle, ShieldAlert, ListChecks, HelpCircle, Pill, ClipboardList } from "lucide-react";
+import { AlertTriangle, ShieldAlert, ListChecks, HelpCircle, Pill, ClipboardList, Stethoscope } from "lucide-react";
 
 const METRIC_LABELS = {
   heart_rate: "Heart rate",
@@ -36,7 +36,7 @@ export function Editable({ value, onChange, readOnly, testid, multiline, classNa
   );
 }
 
-export function ConcernsCard({ concerns, onEdit, readOnly, intake }) {
+export function ConcernsCard({ concerns, onEdit, readOnly, intake, screening }) {
   const answerMap = {};
   if (intake?.questions) {
     const given = Object.fromEntries((intake.responses || []).map((r) => [r.question_id, r.answer]));
@@ -47,6 +47,13 @@ export function ConcernsCard({ concerns, onEdit, readOnly, intake }) {
       }
     });
   }
+
+  const findingMap = {};
+  (screening?.reports || []).forEach((r) => {
+    (r.findings || []).forEach((f) => {
+      findingMap[f.finding_id] = { ...f, generated_at: r.generated_at, stale: r.stale };
+    });
+  });
 
   return (
     <div className="card p-6" id="sect-alerts" data-testid="briefing-concerns">
@@ -92,6 +99,20 @@ export function ConcernsCard({ concerns, onEdit, readOnly, intake }) {
                 +{(c.intake_refs || []).filter((qid) => answerMap[qid]).length - 3} more intake answers below
               </p>
             )}
+            {(c.screening_refs || []).filter((fid) => findingMap[fid]).slice(0, 3).map((fid) => (
+              <div key={fid} className="mt-2 border-l-2 border-forest pl-3" data-testid={`concern-screening-${i}-${fid}`}>
+                <p className="text-[10px] uppercase tracking-wider font-bold text-forest flex items-center gap-1">
+                  <Stethoscope className="h-3 w-3" /> From the AI screening ·{" "}
+                  {new Date(findingMap[fid].generated_at).toLocaleDateString()}
+                  {findingMap[fid].stale && <span className="text-terracotta">· stale</span>}
+                </p>
+                <p className="text-xs text-ink-soft mt-0.5">
+                  {findingMap[fid].symptom}
+                  {findingMap[fid].onset ? ` · started ${findingMap[fid].onset}` : ""}
+                </p>
+                <p className="text-xs font-medium text-ink">“{findingMap[fid].patient_words}”</p>
+              </div>
+            ))}
           </div>
         ))}
       </div>

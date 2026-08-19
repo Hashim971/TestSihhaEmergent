@@ -26,6 +26,7 @@ from agents.runner import run_agent, AgentRunFailed
 from agents.previsit import PreVisitBriefingAgent
 from agents.briefing_qa import BriefingQAAgent
 from agents.intake import IntakeAgent
+from agents.screening import ScreeningExtractionAgent
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -692,7 +693,8 @@ async def generate_report(sid: str, user=Depends(get_current_user)):
         {"chat_session_id": sid}, {"$set": {"status": "completed", "ended_at": iso()}}
     )
     report.pop("_id", None)
-    return report
+    await extract_report_findings(report, invoked_by=user["user_id"])
+    return await db.health_reports.find_one({"report_id": report["report_id"]}, {"_id": 0})
 
 
 @api.get("/reports")
@@ -1490,6 +1492,115 @@ async def doctor_get_intake(encounter_id: str, user=Depends(require_doctor)):
     if not form:
         return {"encounter_id": encounter_id, "status": "not_generated", "questions": [], "responses": []}
     return form
+
+
+# ---------- Screening findings: structured, citable evidence from screening chats ----------
+SCREENING_AGENT = ScreeningExtractionAgent()
+SCREENING_STALE_DAYS = 90
+
+
+async def extract_report_findings(report, invoked_by, encounter_id=None):
+    """Structures one screening report. Never fails the caller — the report itself is already saved."""
+    try:
+        content, run_id = await run_agent(
+            db, SCREENING_AGENT,
+            patient_user_id=report["user_id"],
+            encounter_id=encounter_id,
+            invoked_by=invoked_by,
+            report=report,
+        )
+    except AgentRunFailed:
+        return None
+    # Re-extraction keeps the id of a symptom already cited by an existing briefing.
+    previous = {(f.get("symptom") or "").strip().lower(): f["finding_id"] for f in (report.get("findings") or [])}
+    findings = content["findings"]
+    for f in findings:
+        stable = previous.get((f.get("symptom") or "").strip().lower())
+        if stable:
+            f["finding_id"] = stable
+    await db.health_reports.update_one(
+        {"report_id": report["report_id"]},
+        {"$set": {"findings": content["findings"], "findings_agent_run_id": run_id,
+                  "findings_extracted_at": iso()}},
+    )
+    await db.agent_runs.update_one(
+        {"agent_run_id": run_id},
+        {"$set": {"output_ref": {"collection": "health_reports", "id": report["report_id"]}}},
+    )
+    return content["findings"]
+
+class ShareReport(BaseModel):
+    encounter_id: Optional[str] = None
+
+
+@api.put("/reports/{report_id}/share")
+async def share_report_for_visit(report_id: str, body: ShareReport, user=Depends(get_current_user)):
+    """A patient chooses which screening the doctor should read for a specific upcoming visit."""
+    report = await db.health_reports.find_one({"report_id": report_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if body.encounter_id:
+        enc = await db.encounters.find_one(
+            {"encounter_id": body.encounter_id, "patient_user_id": user["user_id"]}, {"_id": 0}
+        )
+        if not enc:
+            raise HTTPException(status_code=404, detail="Visit not found")
+    await db.health_reports.update_one(
+        {"report_id": report_id}, {"$set": {"shared_encounter_id": body.encounter_id, "shared_at": iso()}}
+    )
+    return await db.health_reports.find_one({"report_id": report_id}, {"_id": 0})
+
+
+@api.post("/doctor/reports/{report_id}/findings")
+async def redo_report_findings(report_id: str, user=Depends(require_doctor)):
+    report = await db.health_reports.find_one({"report_id": report_id}, {"_id": 0})
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    await assert_doctor_can_access_patient(db, user, report["user_id"])
+    findings = await extract_report_findings(report, invoked_by=user["user_id"])
+    if findings is None:
+        raise HTTPException(status_code=502, detail="Could not structure this screening report")
+    return await db.health_reports.find_one({"report_id": report_id}, {"_id": 0})
+
+
+@api.get("/doctor/screening/{encounter_id}")
+async def doctor_screening_view(encounter_id: str, user=Depends(require_doctor)):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    await assert_doctor_can_access_patient(db, user, enc["patient_user_id"])
+
+    reports = await db.health_reports.find(
+        {"user_id": enc["patient_user_id"]}, {"_id": 0}
+    ).sort("generated_at", -1).to_list(10)
+    timeline, _ = await agent_tools.get_symptom_timeline(db, enc["patient_user_id"], days=180)
+
+    message_ids = [mid for r in reports for f in (r.get("findings") or []) for mid in f.get("source_message_ids", [])]
+    messages = await db.chat_messages.find(
+        {"message_id": {"$in": message_ids}}, {"_id": 0, "message_id": 1, "role": 1, "content": 1}
+    ).to_list(500) if message_ids else []
+    excerpts = {m["message_id"]: m for m in messages}
+
+    out = []
+    for r in reports:
+        age_days = None
+        try:
+            age_days = (now_utc() - datetime.fromisoformat(r["generated_at"])).days
+        except (ValueError, TypeError):
+            pass
+        out.append({
+            "report_id": r["report_id"],
+            "generated_at": r["generated_at"],
+            "age_days": age_days,
+            "stale": age_days is not None and age_days > SCREENING_STALE_DAYS,
+            "shared_for_this_visit": r.get("shared_encounter_id") == encounter_id,
+            "shared_at": r.get("shared_at"),
+            "findings_extracted_at": r.get("findings_extracted_at"),
+            "findings": r.get("findings") or [],
+            "content": r.get("content"),
+        })
+    return {"encounter_id": encounter_id, "reports": out, "symptom_timeline": timeline["symptoms"],
+            "excerpts": excerpts, "stale_after_days": SCREENING_STALE_DAYS}
 
 
 @api.get("/")

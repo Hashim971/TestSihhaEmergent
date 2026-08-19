@@ -9,6 +9,7 @@ import {
 } from "../components/BriefingSections";
 import { FollowUpPanel } from "../components/FollowUpPanel";
 import { IntakeCard } from "../components/IntakeCard";
+import { ScreeningCard } from "../components/ScreeningCard";
 
 const EMPTY = {
   headline: "", chief_concerns: [], vitals_summary: [], medication_review: [],
@@ -29,6 +30,8 @@ export default function EncounterDetail() {
   const [asking, setAsking] = useState(false);
   const [intake, setIntake] = useState(null);
   const [generatingIntake, setGeneratingIntake] = useState(false);
+  const [screening, setScreening] = useState(null);
+  const [restructuring, setRestructuring] = useState(null);
   const saveTimer = useRef(null);
 
   const signed = artifact?.status === "signed";
@@ -44,6 +47,7 @@ export default function EncounterDetail() {
         .then((t) => setThread(t.data.messages || [])).catch(() => {});
     }
     api.get(`/doctor/intake/${id}`).then((r) => setIntake(r.data)).catch(() => {});
+    api.get(`/doctor/screening/${id}`).then((r) => setScreening(r.data)).catch(() => {});
     api.get(`/doctor/patients/${res.data.encounter.patient_user_id}/summary`)
       .then((s) => setSeries(s.data.vitals || [])).catch(() => {});
   }, [id]);
@@ -74,6 +78,20 @@ export default function EncounterDetail() {
       toast.error(e?.response?.data?.detail || "Could not generate intake questions");
     } finally {
       setGeneratingIntake(false);
+    }
+  };
+
+  const restructureReport = async (reportId) => {
+    setRestructuring(reportId);
+    try {
+      await api.post(`/doctor/reports/${reportId}/findings`);
+      const res = await api.get(`/doctor/screening/${id}`);
+      setScreening(res.data);
+      toast.success("Screening findings structured");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not structure that report");
+    } finally {
+      setRestructuring(null);
     }
   };
 
@@ -162,6 +180,8 @@ export default function EncounterDetail() {
       </div>
 
       <IntakeCard intake={intake} onGenerate={generateIntake} generating={generatingIntake} />
+      <ScreeningCard screening={screening} excerpts={screening?.excerpts} onRestructure={restructureReport}
+        restructuring={restructuring} onAsk={(q) => (artifact ? ask(q) : toast.info("Generate the briefing first"))} />
 
       {!artifact && !generating && (
         <div className="card p-10 text-center" data-testid="briefing-empty-state">
@@ -208,7 +228,8 @@ export default function EncounterDetail() {
               </div>
             </div>
 
-            <ConcernsCard concerns={draft.chief_concerns} onEdit={editConcern} readOnly={signed} intake={intake} />
+            <ConcernsCard concerns={draft.chief_concerns} onEdit={editConcern} readOnly={signed} intake={intake}
+              screening={screening} />
             <VitalsCard vitals={draft.vitals_summary} series={series} />
             <MedicationsCard meds={draft.medication_review} />
             <ListCard
@@ -242,6 +263,13 @@ export default function EncounterDetail() {
                 {intake?.status === "complete" && intake.updated_at > artifact.created_at && (
                   <p className="text-xs text-terracotta" data-testid="stale-briefing-hint">
                     The patient answered their intake after this briefing was written — regenerate to include it.
+                  </p>
+                )}
+                {(screening?.reports || []).some(
+                  (r) => r.shared_for_this_visit && (r.shared_at || r.generated_at) > artifact.created_at
+                ) && (
+                  <p className="text-xs text-terracotta" data-testid="stale-screening-hint">
+                    A screening was shared for this visit after the briefing was written — regenerate to include it.
                   </p>
                 )}
               </div>

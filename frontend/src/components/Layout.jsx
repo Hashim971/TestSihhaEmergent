@@ -123,10 +123,12 @@ export default function Layout() {
           )}
         </nav>
         <div className="p-4 border-t border-line space-y-2">
-          <button onClick={toggleRole} data-testid="toggle-role-btn" className="btn-outline w-full justify-center text-xs">
-            <Stethoscope className="h-3.5 w-3.5" />
-            {user.role === "doctor" ? "Switch to Patient" : "Switch to Doctor"}
-          </button>
+          {user.is_admin && (
+            <button onClick={toggleRole} data-testid="toggle-role-btn" className="btn-outline w-full justify-center text-xs">
+              <Stethoscope className="h-3.5 w-3.5" />
+              {user.role === "doctor" ? "Switch to Patient" : "Switch to Doctor"}
+            </button>
+          )}
           <button onClick={toggleSharing} data-testid="toggle-sharing-btn"
             className={`btn-outline w-full justify-center text-xs ${user.sharing_enabled ? "!bg-sage/30 !border-sage" : ""}`}>
             <Share2 className="h-3.5 w-3.5" />

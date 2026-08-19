@@ -45,7 +45,7 @@ class IntakeAgent:
     model = MODEL
 
     def __init__(self):
-        self.system_prompt, self.prompt_version = load_prompt("intake_v1.md")
+        self.system_prompt, self.prompt_version = load_prompt("intake_v2.md")
 
     async def run(self, db, *, patient_user_id, encounter_id, profile_id, encounter=None):
         import server
@@ -53,11 +53,13 @@ class IntakeAgent:
         profile, profile_ids = await tools.get_health_profile(db, patient_user_id)
         meds, med_ids = await tools.get_medications_with_adherence(db, profile_id, days=30)
         alerts, alert_ids = await tools.get_recent_alerts(db, patient_user_id, days=30)
+        timeline, report_ids = await tools.get_symptom_timeline(db, patient_user_id, days=180)
 
         context = {
             "patient_health_profile": profile,
             "active_medications": [m["name"] for m in meds["medications"]],
             "recent_alerts": alerts["alerts"],
+            "screening_findings": timeline["symptoms"],
             "reason_for_visit": (encounter or {}).get("reason_for_visit") or "",
         }
         chat = LlmChat(
@@ -82,5 +84,6 @@ class IntakeAgent:
             ))
             form = IntakeForm(**(server.parse_llm_json(repair) or {}))
 
-        input_refs = {"users": profile_ids, "medications": med_ids, "alerts": alert_ids}
+        input_refs = {"users": profile_ids, "medications": med_ids, "alerts": alert_ids,
+                      "health_reports": list(dict.fromkeys(report_ids))}
         return {"questions": [q.model_dump() for q in form.questions]}, input_refs

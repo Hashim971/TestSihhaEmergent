@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import { jsPDF } from "jspdf";
 import { Send, FileText, Plus, MessageSquare } from "lucide-react";
+import { ShareScreeningCard } from "../components/ShareScreeningCard";
 
 export default function HealthChat() {
   const { activeProfile } = useAuth();
@@ -14,6 +15,12 @@ export default function HealthChat() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [generatingReport, setGeneratingReport] = useState(false);
+  const [lastReport, setLastReport] = useState(null);
+
+  useEffect(() => {
+    // Surface the newest screening report so it stays shareable after a page reload.
+    api.get("/reports").then(({ data }) => setLastReport(data[0] || null)).catch(() => {});
+  }, []);
   const endRef = useRef(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -100,6 +107,7 @@ export default function HealthChat() {
     setGeneratingReport(true);
     try {
       const res = await api.post(`/chat/sessions/${sessionId}/report`);
+      setLastReport(res.data);
       downloadPdf(res.data.content);
       toast.success("Health screening report downloaded");
       loadSessions();
@@ -144,6 +152,7 @@ export default function HealthChat() {
         <button onClick={newSession} data-testid="new-screening-btn" className="btn-primary w-full justify-center">
           <Plus className="h-4 w-4" /> New Screening
         </button>
+        {lastReport && <ShareScreeningCard report={lastReport} />}
         <div className="card p-3 space-y-1 max-h-[480px] overflow-y-auto" data-testid="chat-sessions-list">
           {sessions.length === 0 && <p className="text-sm text-ink-soft p-3">No screenings yet.</p>}
           {sessions.map((s) => (

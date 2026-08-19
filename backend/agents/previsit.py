@@ -17,6 +17,7 @@ class ChiefConcern(BaseModel):
     evidence: str
     priority: str
     intake_refs: List[str] = []
+    screening_refs: List[str] = []
 
 
 class VitalLine(BaseModel):
@@ -48,7 +49,9 @@ async def gather_context(db, patient_user_id, profile_id, encounter=None, encoun
     vitals, vital_ids = await tools.get_vitals_summary(db, profile_id, days=90)
     meds, med_ids = await tools.get_medications_with_adherence(db, profile_id, days=90)
     alerts, alert_ids = await tools.get_recent_alerts(db, patient_user_id, days=90)
-    reports, report_ids = await tools.get_recent_screening_reports(db, patient_user_id, limit=3)
+    reports, report_ids = await tools.get_recent_screening_reports(
+        db, patient_user_id, limit=3, encounter_id=encounter_id)
+    timeline, _ = await tools.get_symptom_timeline(db, patient_user_id, days=180)
     interactions, _ = await tools.get_interaction_flags(db, profile_id)
     intake, intake_ids = await tools.get_intake_responses(db, encounter_id) if encounter_id else ({}, [])
 
@@ -60,6 +63,7 @@ async def gather_context(db, patient_user_id, profile_id, encounter=None, encoun
         "medications": meds,
         "alerts": alerts,
         "screening_reports": reports,
+        "symptom_timeline": timeline,
         "intake": intake,
         "interaction_reference": interactions,
     }
@@ -76,7 +80,7 @@ class PreVisitBriefingAgent:
     model = MODEL
 
     def __init__(self):
-        self.system_prompt, self.prompt_version = load_prompt("previsit_v3.md")
+        self.system_prompt, self.prompt_version = load_prompt("previsit_v4.md")
 
     async def run(self, db, *, patient_user_id, encounter_id, profile_id, encounter=None):
         import server

@@ -4,7 +4,7 @@ Every function returns (data, document_ids). Agents never query the database dir
 so `agent_runs.input_refs` can record exactly which documents fed a generation.
 """
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from statistics import mean
 
 from . import REFERENCE_DIR
@@ -132,16 +132,62 @@ async def get_recent_alerts(db, patient_user_id, days=90):
     return {"window_days": days, "alerts": data}, [a["alert_id"] for a in docs]
 
 
-async def get_recent_screening_reports(db, patient_user_id, limit=3):
+async def get_recent_screening_reports(db, patient_user_id, limit=3, encounter_id=None, stale_days=90):
+    srv = _srv()
     docs = await db.health_reports.find(
         {"user_id": patient_user_id}, {"_id": 0}
     ).sort("generated_at", -1).to_list(limit)
-    data = [{
-        "report_id": r["report_id"],
-        "generated_at": r.get("generated_at"),
-        "content": (r.get("content") or "")[:4000],
-    } for r in docs]
-    return {"reports": data}, [r["report_id"] for r in docs]
+    now = srv.now_utc()
+    data = []
+    for r in docs:
+        try:
+            age_days = (now - datetime.fromisoformat(r["generated_at"])).days
+        except (ValueError, TypeError):
+            age_days = None
+        data.append({
+            "report_id": r["report_id"],
+            "generated_at": r.get("generated_at"),
+            "age_days": age_days,
+            "stale": age_days is not None and age_days > stale_days,
+            "shared_for_this_visit": bool(encounter_id) and r.get("shared_encounter_id") == encounter_id,
+            "findings": r.get("findings") or [],
+            "findings_extracted": bool(r.get("findings_extracted_at")),
+            "content": (r.get("content") or "")[:4000],
+        })
+    return {"reports": data, "stale_after_days": stale_days}, [r["report_id"] for r in docs]
+
+
+async def get_symptom_timeline(db, patient_user_id, days=180):
+    """Groups structured screening findings by symptom so repetition over time is visible."""
+    srv = _srv()
+    since = srv.iso(srv.now_utc() - timedelta(days=days))
+    docs = await db.health_reports.find(
+        {"user_id": patient_user_id, "generated_at": {"$gte": since}}, {"_id": 0}
+    ).sort("generated_at", 1).to_list(50)
+
+    groups = {}
+    for r in docs:
+        for f in r.get("findings") or []:
+            key = (f.get("symptom") or "").strip().lower()
+            if not key:
+                continue
+            groups.setdefault(key, []).append({
+                "finding_id": f["finding_id"],
+                "report_id": r["report_id"],
+                "generated_at": r["generated_at"],
+                "severity": f.get("severity"),
+                "onset": f.get("onset"),
+                "patient_words": f.get("patient_words"),
+            })
+
+    timeline = [{
+        "symptom": symptom,
+        "times_reported": len(items),
+        "first_reported_at": items[0]["generated_at"],
+        "last_reported_at": items[-1]["generated_at"],
+        "occurrences": items,
+    } for symptom, items in sorted(groups.items(), key=lambda kv: -len(kv[1]))]
+    return {"window_days": days, "symptoms": timeline}, [i["report_id"] for g in timeline for i in g["occurrences"]]
 
 
 async def get_intake_responses(db, encounter_id):

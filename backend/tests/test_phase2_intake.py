@@ -88,7 +88,7 @@ class TestIntakeGeneration:
     def test_agent_run_logged_with_output_ref(self, db, form):
         run = db.agent_runs.find_one({"agent_run_id": form["agent_run_id"]}, {"_id": 0})
         assert run and run["agent_type"] == "intake_form" and run["status"] == "success"
-        assert run["prompt_version"] == "v1"
+        assert run["prompt_version"] == "v2"
         assert run["output_ref"] == {"collection": "intake_forms", "id": form["intake_form_id"]}
 
     def test_regeneration_blocked_once_answering_started(self, doctor, patient, encounter, form):
@@ -114,6 +114,9 @@ def _answer_for(q):
 class TestPatientAnswers:
     def test_patient_sees_form_and_partial_progress_persists(self, patient, encounter, form):
         ps, _ = patient
+        first = form["questions"][0]
+        ps.post(f"{API}/intake/{encounter['encounter_id']}/responses",
+                json={"responses": [{"question_id": first["question_id"], "answer": _answer_for(first)}]}, timeout=60)
         r = ps.get(f"{API}/intake/{encounter['encounter_id']}", timeout=60)
         assert r.status_code == 200
         body = r.json()
@@ -191,7 +194,7 @@ class TestDoctorViewAndBriefing:
         assert r.status_code == 200, r.text
         artifact = r.json()
         run = db.agent_runs.find_one({"agent_run_id": artifact["agent_run_id"]}, {"_id": 0})
-        assert run["prompt_version"] == "v3"
+        assert run["prompt_version"] == "v4"
         assert run["input_refs"]["intake_forms"], "briefing must record the intake form it read"
         concerns = artifact["content"]["chief_concerns"]
         blob = " ".join(c["evidence"].lower() for c in concerns) + " " + " ".join(
@@ -206,5 +209,5 @@ class TestDoctorViewAndBriefing:
     def test_older_prompt_versions_still_on_disk_for_audit(self):
         from pathlib import Path
         prompts = Path(__file__).parent.parent / "agents" / "prompts"
-        assert (prompts / "previsit_v1.md").exists()
-        assert (prompts / "previsit_v2.md").exists()
+        for name in ("previsit_v1.md", "previsit_v2.md", "previsit_v3.md", "intake_v1.md"):
+            assert (prompts / name).exists(), name
