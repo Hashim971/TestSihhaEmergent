@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Any
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
 from gradio_client import Client as GradioClient, handle_file
@@ -25,6 +25,7 @@ from agents import tools as agent_tools
 from agents.runner import run_agent, AgentRunFailed
 from agents.previsit import PreVisitBriefingAgent
 from agents.briefing_qa import BriefingQAAgent
+from agents.intake import IntakeAgent
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -264,6 +265,8 @@ async def seed_and_index():
     await db.agent_runs.create_index([("patient_user_id", 1), ("created_at", -1)])
     await db.clinical_artifacts.create_index("encounter_id")
     await db.briefing_threads.create_index("artifact_id", unique=True)
+    await db.intake_forms.create_index("encounter_id", unique=True)
+    await db.intake_forms.create_index([("patient_user_id", 1), ("status", 1)])
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@sihha.ai").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@123")
     existing = await db.users.find_one({"email": admin_email})
@@ -1032,6 +1035,7 @@ async def doctor_patient_summary(patient_id: str, user=Depends(require_doctor)):
 # ---------- Clinical Agents: Encounters, Pre-Visit Briefings, Artifacts ----------
 PREVISIT_AGENT = PreVisitBriefingAgent()
 BRIEFING_QA_AGENT = BriefingQAAgent()
+INTAKE_AGENT = IntakeAgent()
 
 
 async def assert_doctor_can_access_patient(db, doctor, patient_user_id: str):
@@ -1111,11 +1115,16 @@ async def _decorate_encounters(encounters):
     ).to_list(400)
     names = {u["user_id"]: u.get("name") for u in users}
     briefings = {a["encounter_id"]: {"artifact_id": a["artifact_id"], "status": a["status"]} for a in artifacts}
+    forms = await db.intake_forms.find(
+        {"encounter_id": {"$in": enc_ids}}, {"_id": 0, "encounter_id": 1, "status": 1, "expires_at": 1}
+    ).to_list(400)
+    intakes = {f["encounter_id"]: {"status": f["status"], "expires_at": f["expires_at"]} for f in forms}
     return [{
         **enc,
         "patient_name": names.get(enc["patient_user_id"]),
         "doctor_name": names.get(enc["doctor_user_id"]),
         "briefing": briefings.get(enc["encounter_id"]),
+        "intake": intakes.get(enc["encounter_id"]),
     } for enc in encounters]
 
 
@@ -1340,6 +1349,139 @@ async def list_agent_runs(limit: int = Query(50, le=200), skip: int = 0,
     total = await db.agent_runs.count_documents(query)
     runs = await db.agent_runs.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).to_list(limit)
     return {"total": total, "limit": limit, "skip": skip, "runs": runs}
+
+
+# ---------- Intake Agent: pre-visit questionnaire ----------
+class IntakeResponseIn(BaseModel):
+    question_id: str
+    answer: Any
+
+
+class IntakeResponsesIn(BaseModel):
+    responses: List[IntakeResponseIn]
+
+
+def _intake_expiry(encounter):
+    """Defaults to the appointment time; a form is never born already expired."""
+    scheduled = encounter.get("scheduled_at") or iso()
+    floor = iso(now_utc() + timedelta(hours=24))
+    return max(scheduled, floor)
+
+
+async def _patient_encounter(encounter_id: str, user):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    if enc["patient_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="This intake form belongs to another patient")
+    return enc
+
+
+@api.post("/agents/intake/{encounter_id}")
+async def generate_intake_form(encounter_id: str, user=Depends(require_doctor)):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    await assert_doctor_can_access_patient(db, user, enc["patient_user_id"])
+
+    existing = await db.intake_forms.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if existing and existing.get("responses"):
+        raise HTTPException(status_code=409, detail="The patient has already started answering this form")
+
+    try:
+        content, run_id = await run_agent(
+            db, INTAKE_AGENT,
+            patient_user_id=enc["patient_user_id"],
+            encounter_id=encounter_id,
+            invoked_by=user["user_id"],
+            profile_id=enc["profile_id"],
+            encounter=enc,
+        )
+    except AgentRunFailed as exc:
+        raise _agent_http_error(exc)
+
+    form = {
+        "intake_form_id": f"intake_{uuid.uuid4().hex[:12]}",
+        "encounter_id": encounter_id,
+        "patient_user_id": enc["patient_user_id"],
+        "profile_id": enc["profile_id"],
+        "questions": content["questions"],
+        "responses": [],
+        "status": "pending",
+        "agent_run_id": run_id,
+        "expires_at": _intake_expiry(enc),
+        "created_at": iso(),
+        "updated_at": iso(),
+    }
+    await db.intake_forms.replace_one({"encounter_id": encounter_id}, dict(form), upsert=True)
+    await db.agent_runs.update_one(
+        {"agent_run_id": run_id},
+        {"$set": {"output_ref": {"collection": "intake_forms", "id": form["intake_form_id"]}}},
+    )
+    return form
+
+
+@api.get("/intake/{encounter_id}")
+async def get_my_intake(encounter_id: str, user=Depends(get_current_user)):
+    enc = await _patient_encounter(encounter_id, user)
+    form = await db.intake_forms.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not form:
+        raise HTTPException(status_code=404, detail="No intake form for this visit yet")
+    return {**form, "scheduled_at": enc["scheduled_at"], "reason_for_visit": enc.get("reason_for_visit")}
+
+
+@api.post("/intake/{encounter_id}/responses")
+async def submit_intake_responses(encounter_id: str, body: IntakeResponsesIn, user=Depends(get_current_user)):
+    enc = await _patient_encounter(encounter_id, user)
+    form = await db.intake_forms.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not form:
+        raise HTTPException(status_code=404, detail="No intake form for this visit yet")
+    if iso() > form["expires_at"]:
+        raise HTTPException(status_code=409, detail="This questionnaire has closed. Please tell your doctor in person.")
+
+    valid_ids = {q["question_id"] for q in form["questions"]}
+    answers = {r["question_id"]: r for r in form.get("responses", [])}
+    for item in body.responses:
+        if item.question_id not in valid_ids:
+            raise HTTPException(status_code=400, detail=f"Unknown question {item.question_id}")
+        answers[item.question_id] = {
+            "question_id": item.question_id, "answer": item.answer, "answered_at": iso(),
+        }
+
+    responses = [answers[q["question_id"]] for q in form["questions"] if q["question_id"] in answers]
+    required = [q["question_id"] for q in form["questions"] if q.get("required")]
+    complete = all(answers.get(q, {}).get("answer") not in (None, "", []) for q in required)
+    status = "complete" if complete else ("partial" if responses else "pending")
+
+    await db.intake_forms.update_one(
+        {"encounter_id": encounter_id},
+        {"$set": {"responses": responses, "status": status, "updated_at": iso()}},
+    )
+
+    if status == "complete" and form["status"] != "complete":
+        await db.alerts.insert_one({
+            "alert_id": f"alert_{uuid.uuid4().hex[:12]}",
+            "user_id": enc["doctor_user_id"],
+            "profile_id": enc["profile_id"],
+            "type": "intake",
+            "severity": "info",
+            "message": f"{user.get('name')} completed pre-visit intake",
+            "read": False,
+            "created_at": iso(),
+        })
+    return await db.intake_forms.find_one({"encounter_id": encounter_id}, {"_id": 0})
+
+
+@api.get("/doctor/intake/{encounter_id}")
+async def doctor_get_intake(encounter_id: str, user=Depends(require_doctor)):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    await assert_doctor_can_access_patient(db, user, enc["patient_user_id"])
+    form = await db.intake_forms.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not form:
+        return {"encounter_id": encounter_id, "status": "not_generated", "questions": [], "responses": []}
+    return form
 
 
 @api.get("/")

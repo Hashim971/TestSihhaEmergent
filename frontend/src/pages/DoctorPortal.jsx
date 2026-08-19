@@ -86,8 +86,8 @@ export default function DoctorPortal() {
             <div className="space-y-2 max-h-56 overflow-y-auto">
               {summary.alerts.length === 0 && <p className="text-sm text-ink-soft">No alerts.</p>}
               {summary.alerts.map((a) => (
-                <div key={a.alert_id} className={`text-sm border rounded-lg px-3 py-2 ${a.severity === "critical" ? "border-terracotta/40 bg-terracotta/5" : "border-line"}`}>
-                  <span className="text-[10px] uppercase tracking-wider font-bold text-terracotta">{a.type} · {a.severity}</span>
+                <div key={a.alert_id} className={`text-sm border rounded-lg px-3 py-2 ${a.severity === "critical" ? "border-terracotta/40 bg-terracotta/5" : a.severity === "info" ? "border-sage/50 bg-sage/10" : "border-line"}`}>
+                  <span className={`text-[10px] uppercase tracking-wider font-bold ${a.severity === "info" ? "text-forest" : "text-terracotta"}`}>{a.type} · {a.severity}</span>
                   <p>{a.message}</p>
                 </div>
               ))}

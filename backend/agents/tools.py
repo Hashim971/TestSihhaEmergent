@@ -144,6 +144,28 @@ async def get_recent_screening_reports(db, patient_user_id, limit=3):
     return {"reports": data}, [r["report_id"] for r in docs]
 
 
+async def get_intake_responses(db, encounter_id):
+    form = await db.intake_forms.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not form:
+        return {"status": "not_generated", "answered": []}, []
+    answers = {r["question_id"]: r for r in form.get("responses", [])}
+    answered = [{
+        "question": q["text"],
+        "type": q["type"],
+        "required": q.get("required", False),
+        "answer": answers.get(q["question_id"], {}).get("answer"),
+        "answered_at": answers.get(q["question_id"], {}).get("answered_at"),
+    } for q in form.get("questions", [])]
+    data = {
+        "intake_form_id": form["intake_form_id"],
+        "status": form["status"],
+        "expires_at": form.get("expires_at"),
+        "answered": answered,
+        "unanswered_count": sum(1 for a in answered if a["answer"] in (None, "", [])),
+    }
+    return data, [form["intake_form_id"]]
+
+
 def _load_interactions():
     return json.loads((REFERENCE_DIR / "interactions.json").read_text(encoding="utf-8"))
 

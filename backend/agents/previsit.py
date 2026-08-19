@@ -42,13 +42,14 @@ class PreVisitBrief(BaseModel):
     confidence: str
 
 
-async def gather_context(db, patient_user_id, profile_id, encounter=None):
+async def gather_context(db, patient_user_id, profile_id, encounter=None, encounter_id=None):
     profile, profile_ids = await tools.get_health_profile(db, patient_user_id)
     vitals, vital_ids = await tools.get_vitals_summary(db, profile_id, days=90)
     meds, med_ids = await tools.get_medications_with_adherence(db, profile_id, days=90)
     alerts, alert_ids = await tools.get_recent_alerts(db, patient_user_id, days=90)
     reports, report_ids = await tools.get_recent_screening_reports(db, patient_user_id, limit=3)
     interactions, _ = await tools.get_interaction_flags(db, profile_id)
+    intake, intake_ids = await tools.get_intake_responses(db, encounter_id) if encounter_id else ({}, [])
 
     context = {
         "patient": profile,
@@ -58,11 +59,13 @@ async def gather_context(db, patient_user_id, profile_id, encounter=None):
         "medications": meds,
         "alerts": alerts,
         "screening_reports": reports,
+        "intake": intake,
         "interaction_reference": interactions,
     }
     input_refs = {
         "vitals": vital_ids, "medications": med_ids,
         "alerts": alert_ids, "health_reports": report_ids, "users": profile_ids,
+        "intake_forms": intake_ids,
     }
     return context, input_refs, interactions
 
@@ -72,12 +75,12 @@ class PreVisitBriefingAgent:
     model = MODEL
 
     def __init__(self):
-        self.system_prompt, self.prompt_version = load_prompt("previsit_v1.md")
+        self.system_prompt, self.prompt_version = load_prompt("previsit_v2.md")
 
     async def run(self, db, *, patient_user_id, encounter_id, profile_id, encounter=None):
         import server
 
-        context, input_refs, _ = await gather_context(db, patient_user_id, profile_id, encounter)
+        context, input_refs, _ = await gather_context(db, patient_user_id, profile_id, encounter, encounter_id)
         payload = json.dumps(context, default=str)
 
         chat = LlmChat(

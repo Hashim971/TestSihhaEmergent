@@ -3,7 +3,8 @@ import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { HeartPulse, Droplets, Thermometer, Wind, Gauge, Plus, Zap } from "lucide-react";
+import { HeartPulse, Droplets, Thermometer, Wind, Gauge, Plus, Zap, ClipboardList } from "lucide-react";
+import { Link } from "react-router-dom";
 
 const vitalCards = [
   { key: "heart_rate", label: "Heart Rate", unit: "bpm", icon: HeartPulse },
@@ -20,6 +21,16 @@ export default function Dashboard() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ heart_rate: "", systolic: "", diastolic: "", glucose: "", spo2: "", temperature: "" });
   const [simulating, setSimulating] = useState(false);
+  const [intakeTodo, setIntakeTodo] = useState(null);
+
+  useEffect(() => {
+    api.get("/encounters")
+      .then(({ data }) => {
+        const pending = data.find((e) => e.intake && ["pending", "partial"].includes(e.intake.status));
+        setIntakeTodo(pending || null);
+      })
+      .catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
     const pid = activeProfile.id;
@@ -75,6 +86,31 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {intakeTodo && (
+        <div className="card p-6 flex flex-wrap items-center justify-between gap-4 border-sage"
+          data-testid="intake-prompt-card">
+          <div className="flex items-start gap-3">
+            <ClipboardList className="h-5 w-5 text-forest mt-0.5" />
+            <div>
+              <p className="font-semibold">
+                {intakeTodo.intake.status === "partial"
+                  ? "Finish your pre-visit questions"
+                  : "Your doctor sent you a few questions"}
+              </p>
+              <p className="text-sm text-ink-soft mt-0.5">
+                For your visit with {intakeTodo.doctor_name} on{" "}
+                {new Date(intakeTodo.scheduled_at).toLocaleDateString(undefined, { month: "long", day: "numeric" })}
+                {intakeTodo.reason_for_visit ? ` · ${intakeTodo.reason_for_visit}` : ""}
+              </p>
+            </div>
+          </div>
+          <Link to={`/intake/${intakeTodo.encounter_id}`} data-testid="complete-intake-btn" className="btn-primary">
+            Complete pre-visit questions
+          </Link>
+        </div>
+      )}
+
 
       {showForm && (
         <form onSubmit={submitVital} className="card p-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4" data-testid="vitals-form">

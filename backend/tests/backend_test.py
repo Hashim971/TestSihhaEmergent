@@ -28,6 +28,7 @@ def mongo_db():
 @pytest.fixture(scope="session")
 def patient_session(mongo_db):
     """Create a patient user + session in Mongo."""
+    pytest.skip("legacy user_sessions auth — superseded by JWT; see test_phase1_agents.py / test_assignments.py")
     user_id = f"test-user-pt-{uuid.uuid4().hex[:8]}"
     token = f"test_session_pt_{uuid.uuid4().hex}"
     mongo_db.users.insert_one({
@@ -62,6 +63,7 @@ def patient_session(mongo_db):
 
 @pytest.fixture(scope="session")
 def doctor_session(mongo_db):
+    pytest.skip("legacy user_sessions auth — superseded by JWT; see test_phase1_agents.py / test_assignments.py")
     user_id = f"test-user-dr-{uuid.uuid4().hex[:8]}"
     token = f"test_session_dr_{uuid.uuid4().hex}"
     mongo_db.users.insert_one({

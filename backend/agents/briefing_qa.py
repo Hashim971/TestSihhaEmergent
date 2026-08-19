@@ -32,7 +32,7 @@ class BriefingQAAgent:
     async def run(self, db, *, patient_user_id, encounter_id, profile_id, artifact, question, history=None):
         import server
 
-        context, input_refs, _ = await gather_context(db, patient_user_id, profile_id, None)
+        context, input_refs, _ = await gather_context(db, patient_user_id, profile_id, None, encounter_id)
         briefing = artifact.get("edited_content") or artifact.get("content")
         context["briefing"] = {"artifact_id": artifact["artifact_id"], "status": artifact["status"], "content": briefing}
 

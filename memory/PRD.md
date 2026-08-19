@@ -33,7 +33,7 @@ Patent: System and Method for Real-Time Healthcare Management Using Multimodal D
 Strict ADDITIVE-ONLY contract: no refactors, no renames, no new npm/pip packages, no touching /app/legacy.
 - Phase 0 — Security fixes: DONE (June 2026)
 - Phase 1 — Agent runtime + Pre-Visit Briefing Agent + interactive follow-up: DONE (June 2026)
-- Phase 2 — Intake Agent (intake_forms, Intake.jsx wizard): PENDING
+- Phase 2 — Intake Agent (intake_forms, Intake.jsx wizard): DONE (June 2026)
 - Phase 3 — Clinical Scribe, Arabic-first (Transcriber protocol + stub provider, SOAP notes, consent gate): PENDING
 - Phase 4 — Coding Agent, NPHIES/ICD-10-AM FHIR R4 (signed notes only): PENDING
 - Phase 5 — Triage Agent (deterministic red-flag rules before LLM, feature-flagged off): PENDING
@@ -100,6 +100,31 @@ revokes the previous doctor immediately.
   dr.layla@sihha.ai (the admin sees everyone regardless).
 - Tests: `/app/backend/tests/test_assignments.py` — 13 pass; Phase 0 (7) and Phase 1 (16) still pass.
   Frontend testing agent 8/8 (`/app/test_reports/iteration_4.json`).
+
+## Phase 2 — Intake Agent (completed June 2026)
+`agents/intake.py` + `agents/prompts/intake_v1.md`: generates 5-8 plain-language, non-leading questions
+(≤2 free text, ≤4 required, single_choice/scale preferred, escape options, no diagnostic language) from the
+health profile, active medications, 30-day alerts and the encounter's reason for visit. Validated with Pydantic
+(`IntakeForm` enforces the 5-8 and ≤2-text bounds) with one repair retry, and it runs through the Phase 1
+`runner.py`, so every generation lands in `agent_runs` with `output_ref` → `intake_forms`.
+Collection `intake_forms` (unique on `encounter_id`, plus patient+status index): questions, upserted
+`responses`, `status` pending → partial → complete, `expires_at` (encounter time, floored at now+24h so a form
+is never born expired). Regeneration is blocked with 409 once the patient has started answering.
+Routes: `POST /api/agents/intake/{encounter_id}` (doctor), `GET /api/intake/{encounter_id}` and
+`POST /api/intake/{encounter_id}/responses` (patient-owner only, partial upsert by question_id, 409 after
+expiry, 400 on unknown question), `GET /api/doctor/intake/{encounter_id}`. Completion inserts an `info`
+severity alert for the doctor — `info` is styled sage/green in `Layout.jsx` and `DoctorPortal.jsx`, never terracotta.
+Briefing wiring: `tools.get_intake_responses()` feeds `gather_context`, the Pre-Visit Briefing Agent moved to
+`previsit_v2.md` (prompt_version v2, treats intake answers as first-class evidence and names disagreements
+with measured data); `previsit_v1.md` stays on disk so older `agent_runs` remain resolvable.
+Frontend: `pages/Intake.jsx` at `/intake/:encounterId` (one question per screen, progress bar, Back/Next,
+autosave on advance, resumes at the first unanswered question, reuses `YesNo.jsx` for Yes/No options,
+completion screen), `components/IntakeCard.jsx` on the encounter page above the briefing, and an intake
+prompt card on the patient dashboard driven by the `intake` field now returned by `GET /api/encounters`.
+A hint next to Regenerate appears when intake was completed after the current briefing was written.
+Tests: `/app/backend/tests/test_phase2_intake.py` — 13 pass; frontend testing agent 10/10
+(`/app/test_reports/iteration_5.json`). Three generated forms manually reviewed for diagnostic language.
+Note: the legacy `user_sessions` tests in `backend_test.py` are now explicitly skipped (pre-JWT era).
 
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)

@@ -15,6 +15,7 @@ import Dependents from "./pages/Dependents";
 import DoctorPortal from "./pages/DoctorPortal";
 import DoctorSchedule from "./pages/DoctorSchedule";
 import AdminAssignments from "./pages/AdminAssignments";
+import Intake from "./pages/Intake";
 import EncounterDetail from "./pages/EncounterDetail";
 import Settings from "./pages/Settings";
 
@@ -35,6 +36,7 @@ export default function App() {
             <Route path="/doctor" element={<DoctorPortal />} />
             <Route path="/doctor/schedule" element={<DoctorSchedule />} />
             <Route path="/admin/assignments" element={<AdminAssignments />} />
+            <Route path="/intake/:encounterId" element={<Intake />} />
             <Route path="/doctor/encounters/:id" element={<EncounterDetail />} />
             <Route path="/settings" element={<Settings />} />
           </Route>

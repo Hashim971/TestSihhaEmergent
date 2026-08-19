@@ -8,6 +8,7 @@ import {
   ConcernsCard, VitalsCard, MedicationsCard, ListCard, InteractionCard, Editable,
 } from "../components/BriefingSections";
 import { FollowUpPanel } from "../components/FollowUpPanel";
+import { IntakeCard } from "../components/IntakeCard";
 
 const EMPTY = {
   headline: "", chief_concerns: [], vitals_summary: [], medication_review: [],
@@ -26,6 +27,8 @@ export default function EncounterDetail() {
   const [generating, setGenerating] = useState(false);
   const [thread, setThread] = useState([]);
   const [asking, setAsking] = useState(false);
+  const [intake, setIntake] = useState(null);
+  const [generatingIntake, setGeneratingIntake] = useState(false);
   const saveTimer = useRef(null);
 
   const signed = artifact?.status === "signed";
@@ -40,6 +43,7 @@ export default function EncounterDetail() {
       api.get(`/artifacts/${res.data.artifact.artifact_id}/thread`)
         .then((t) => setThread(t.data.messages || [])).catch(() => {});
     }
+    api.get(`/doctor/intake/${id}`).then((r) => setIntake(r.data)).catch(() => {});
     api.get(`/doctor/patients/${res.data.encounter.patient_user_id}/summary`)
       .then((s) => setSeries(s.data.vitals || [])).catch(() => {});
   }, [id]);
@@ -57,6 +61,19 @@ export default function EncounterDetail() {
       toast.error(e?.response?.data?.detail || "Briefing generation failed. Try again.");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const generateIntake = async () => {
+    setGeneratingIntake(true);
+    try {
+      const res = await api.post(`/agents/intake/${id}`);
+      setIntake(res.data);
+      toast.success("Intake questions sent to the patient");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not generate intake questions");
+    } finally {
+      setGeneratingIntake(false);
     }
   };
 
@@ -144,6 +161,8 @@ export default function EncounterDetail() {
         </div>
       </div>
 
+      <IntakeCard intake={intake} onGenerate={generateIntake} generating={generatingIntake} />
+
       {!artifact && !generating && (
         <div className="card p-10 text-center" data-testid="briefing-empty-state">
           <Sparkles className="h-9 w-9 text-sage mx-auto mb-3" />
@@ -213,13 +232,18 @@ export default function EncounterDetail() {
                 </p>
               </div>
             ) : (
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <button onClick={sign} data-testid="sign-briefing-btn" className="btn-primary">
                   <ShieldCheck className="h-4 w-4" /> Review &amp; Sign
                 </button>
                 <button onClick={generate} data-testid="regenerate-briefing-btn" className="btn-outline">
                   <Sparkles className="h-4 w-4" /> Regenerate
                 </button>
+                {intake?.status === "complete" && intake.updated_at > artifact.created_at && (
+                  <p className="text-xs text-terracotta" data-testid="stale-briefing-hint">
+                    The patient answered their intake after this briefing was written — regenerate to include it.
+                  </p>
+                )}
               </div>
             )}
           </div>

@@ -199,8 +199,10 @@ export default function Layout() {
                     <button
                       key={a.alert_id}
                       onClick={() => markRead(a.alert_id)}
+                      data-testid={`alert-row-${a.alert_id}`}
+                      data-severity={a.severity}
                       className={`w-full text-left px-3 py-2.5 rounded-lg text-sm mb-1 border ${
-                        a.read ? "border-transparent text-ink-soft" : a.severity === "critical" ? "border-terracotta/40 bg-terracotta/5" : "border-line bg-sand"
+                        a.read ? "border-transparent text-ink-soft" : a.severity === "critical" ? "border-terracotta/40 bg-terracotta/5" : a.severity === "info" ? "border-sage/50 bg-sage/10" : "border-line bg-sand"
                       }`}
                     >
                       <span className={`text-[10px] uppercase tracking-wider font-bold ${a.severity === "critical" ? "text-terracotta" : "text-forest"}`}>
