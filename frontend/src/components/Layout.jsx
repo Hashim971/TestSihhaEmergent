@@ -51,7 +51,7 @@ export default function Layout() {
       if (e?.response?.status === 403) {
         toast.error("Role changes are managed by an administrator.");
       } else {
-        toast.error("Could not switch role");
+        toast.error(e?.response?.data?.detail || "Could not switch role");
       }
     }
   };

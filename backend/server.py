@@ -299,6 +299,13 @@ async def set_role(body: RoleUpdate, user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Role changes are administered, not self-service.")
     if body.role not in ("patient", "doctor"):
         raise HTTPException(status_code=400, detail="Invalid role")
+    if user.get("role") == "doctor" and body.role == "patient":
+        assigned = await db.users.count_documents({"assigned_doctor_user_id": user["user_id"]})
+        if assigned:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{assigned} patient(s) are assigned to you. Reassign them before leaving the doctor role.",
+            )
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"role": body.role}})
     return await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION)
 
@@ -1111,8 +1118,8 @@ async def _decorate_encounters(encounters):
     users = await db.users.find({"user_id": {"$in": list(user_ids)}}, USER_PROJECTION).to_list(400)
     artifacts = await db.clinical_artifacts.find(
         {"encounter_id": {"$in": enc_ids}, "artifact_type": "previsit_brief"},
-        {"_id": 0, "artifact_id": 1, "status": 1, "encounter_id": 1},
-    ).to_list(400)
+        {"_id": 0, "artifact_id": 1, "status": 1, "encounter_id": 1, "created_at": 1},
+    ).sort("created_at", 1).to_list(400)
     names = {u["user_id"]: u.get("name") for u in users}
     briefings = {a["encounter_id"]: {"artifact_id": a["artifact_id"], "status": a["status"]} for a in artifacts}
     forms = await db.intake_forms.find(
@@ -1145,9 +1152,10 @@ async def get_encounter(encounter_id: str, user=Depends(get_current_user)):
     patient = await db.users.find_one({"user_id": enc["patient_user_id"]}, USER_PROJECTION)
     artifact = None
     if user.get("role") == "doctor":
-        artifact = await db.clinical_artifacts.find_one(
+        latest = await db.clinical_artifacts.find(
             {"encounter_id": encounter_id, "artifact_type": "previsit_brief"}, {"_id": 0}
-        )
+        ).sort("created_at", -1).to_list(1)
+        artifact = latest[0] if latest else None
     return {"encounter": enc, "patient": patient, "artifact": artifact}
 
 

@@ -150,6 +150,7 @@ async def get_intake_responses(db, encounter_id):
         return {"status": "not_generated", "answered": []}, []
     answers = {r["question_id"]: r for r in form.get("responses", [])}
     answered = [{
+        "question_id": q["question_id"],
         "question": q["text"],
         "type": q["type"],
         "required": q.get("required", False),

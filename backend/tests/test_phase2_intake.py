@@ -185,19 +185,26 @@ class TestDoctorViewAndBriefing:
         body = r.json()
         assert body["status"] == "complete" and len(body["responses"]) >= 5
 
-    def test_briefing_uses_intake_and_bumps_prompt_version(self, doctor, encounter, db):
+    def test_briefing_uses_intake_and_bumps_prompt_version(self, doctor, encounter, db, form):
         ds, _ = doctor
         r = ds.post(f"{API}/agents/previsit/{encounter['encounter_id']}", timeout=180)
         assert r.status_code == 200, r.text
         artifact = r.json()
         run = db.agent_runs.find_one({"agent_run_id": artifact["agent_run_id"]}, {"_id": 0})
-        assert run["prompt_version"] == "v2"
+        assert run["prompt_version"] == "v3"
         assert run["input_refs"]["intake_forms"], "briefing must record the intake form it read"
-        blob = " ".join(
-            c["evidence"].lower() for c in artifact["content"]["chief_concerns"]
-        ) + " " + " ".join(p.lower() for p in artifact["content"]["suggested_discussion_points"])
+        concerns = artifact["content"]["chief_concerns"]
+        blob = " ".join(c["evidence"].lower() for c in concerns) + " " + " ".join(
+            p.lower() for p in artifact["content"]["suggested_discussion_points"])
         assert "intake" in blob or "reported" in blob, artifact["content"]
 
-    def test_v1_prompt_still_on_disk_for_audit(self):
+        valid_ids = {q["question_id"] for q in form["questions"]}
+        refs = [qid for c in concerns for qid in c.get("intake_refs", [])]
+        assert refs, "at least one concern must link the intake answer that supports it"
+        assert all(qid in valid_ids for qid in refs), refs
+
+    def test_older_prompt_versions_still_on_disk_for_audit(self):
         from pathlib import Path
-        assert (Path(__file__).parent.parent / "agents" / "prompts" / "previsit_v1.md").exists()
+        prompts = Path(__file__).parent.parent / "agents" / "prompts"
+        assert (prompts / "previsit_v1.md").exists()
+        assert (prompts / "previsit_v2.md").exists()

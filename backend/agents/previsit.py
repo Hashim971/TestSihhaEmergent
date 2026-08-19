@@ -16,6 +16,7 @@ class ChiefConcern(BaseModel):
     concern: str
     evidence: str
     priority: str
+    intake_refs: List[str] = []
 
 
 class VitalLine(BaseModel):
@@ -75,7 +76,7 @@ class PreVisitBriefingAgent:
     model = MODEL
 
     def __init__(self):
-        self.system_prompt, self.prompt_version = load_prompt("previsit_v2.md")
+        self.system_prompt, self.prompt_version = load_prompt("previsit_v3.md")
 
     async def run(self, db, *, patient_user_id, encounter_id, profile_id, encounter=None):
         import server

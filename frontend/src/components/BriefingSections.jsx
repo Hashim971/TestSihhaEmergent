@@ -1,6 +1,6 @@
 import React from "react";
 import { LineChart, Line, ResponsiveContainer } from "recharts";
-import { AlertTriangle, ShieldAlert, ListChecks, HelpCircle, Pill } from "lucide-react";
+import { AlertTriangle, ShieldAlert, ListChecks, HelpCircle, Pill, ClipboardList } from "lucide-react";
 
 const METRIC_LABELS = {
   heart_rate: "Heart rate",
@@ -36,7 +36,18 @@ export function Editable({ value, onChange, readOnly, testid, multiline, classNa
   );
 }
 
-export function ConcernsCard({ concerns, onEdit, readOnly }) {
+export function ConcernsCard({ concerns, onEdit, readOnly, intake }) {
+  const answerMap = {};
+  if (intake?.questions) {
+    const given = Object.fromEntries((intake.responses || []).map((r) => [r.question_id, r.answer]));
+    intake.questions.forEach((q) => {
+      const a = given[q.question_id];
+      if (a !== undefined && a !== null && a !== "" && !(Array.isArray(a) && a.length === 0)) {
+        answerMap[q.question_id] = { question: q.text, answer: Array.isArray(a) ? a.join(", ") : String(a) };
+      }
+    });
+  }
+
   return (
     <div className="card p-6" id="sect-alerts" data-testid="briefing-concerns">
       <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
@@ -67,6 +78,20 @@ export function ConcernsCard({ concerns, onEdit, readOnly }) {
               <Editable value={c.evidence} readOnly={readOnly} multiline testid={`concern-evidence-${i}`}
                 onChange={(v) => onEdit(i, "evidence", v)} />
             </div>
+            {(c.intake_refs || []).filter((qid) => answerMap[qid]).slice(0, 3).map((qid) => (
+              <div key={qid} className="mt-2 border-l-2 border-sage pl-3" data-testid={`concern-intake-${i}-${qid}`}>
+                <p className="text-[10px] uppercase tracking-wider font-bold text-forest flex items-center gap-1">
+                  <ClipboardList className="h-3 w-3" /> From the patient's intake
+                </p>
+                <p className="text-xs text-ink-soft mt-0.5">{answerMap[qid].question}</p>
+                <p className="text-xs font-medium text-ink">“{answerMap[qid].answer}”</p>
+              </div>
+            ))}
+            {(c.intake_refs || []).filter((qid) => answerMap[qid]).length > 3 && (
+              <p className="text-[10px] text-ink-soft mt-1.5 pl-3" data-testid={`concern-intake-more-${i}`}>
+                +{(c.intake_refs || []).filter((qid) => answerMap[qid]).length - 3} more intake answers below
+              </p>
+            )}
           </div>
         ))}
       </div>

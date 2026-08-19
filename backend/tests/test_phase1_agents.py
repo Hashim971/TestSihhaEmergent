@@ -116,7 +116,7 @@ class TestBriefingGeneration:
         run = db.agent_runs.find_one({"agent_run_id": briefing["agent_run_id"]}, {"_id": 0})
         assert run and run["status"] == "success"
         assert run["output_ref"] == {"collection": "clinical_artifacts", "id": briefing["artifact_id"]}
-        assert run["latency_ms"] > 0 and run["prompt_version"] == "v2"
+        assert run["latency_ms"] > 0 and run["prompt_version"] == "v3"
         assert run["input_refs"]["vitals"] and all(v.startswith("vital_") for v in run["input_refs"]["vitals"])
         blob = str(run)
         for word in briefing["content"]["headline"].split()[:4]:

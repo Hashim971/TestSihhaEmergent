@@ -208,7 +208,7 @@ export default function EncounterDetail() {
               </div>
             </div>
 
-            <ConcernsCard concerns={draft.chief_concerns} onEdit={editConcern} readOnly={signed} />
+            <ConcernsCard concerns={draft.chief_concerns} onEdit={editConcern} readOnly={signed} intake={intake} />
             <VitalsCard vitals={draft.vitals_summary} series={series} />
             <MedicationsCard meds={draft.medication_review} />
             <ListCard

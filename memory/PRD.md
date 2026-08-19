@@ -126,6 +126,17 @@ Tests: `/app/backend/tests/test_phase2_intake.py` — 13 pass; frontend testing 
 (`/app/test_reports/iteration_5.json`). Three generated forms manually reviewed for diagnostic language.
 Note: the legacy `user_sessions` tests in `backend_test.py` are now explicitly skipped (pre-JWT era).
 
+## Intake answers inline in the briefing (June 2026)
+`chief_concerns[].intake_refs` (list of intake `question_id`s) added to the briefing schema; prompt bumped to
+`previsit_v3.md` (v1 and v2 stay on disk for audit). `tools.get_intake_responses` now returns `question_id` per
+answer so the agent can only reference real ids. `ConcernsCard` renders each referenced answer inline under the
+concern — question plus the patient's quoted answer, capped at 3 with a "+N more" note. Verified by
+`test_phase2_intake.py` (asserts v3 and that every `intake_refs` id exists in the form) and by screenshot.
+Two fixes found while doing this: regenerating a briefing now returns the newest artifact (the encounter and
+schedule lookups were taking whichever came first, so a regenerated briefing could stay hidden), and a doctor
+can no longer self-switch to the patient role while patients are assigned to them (409) — that had silently
+orphaned Dr. Layla's panel during a test run.
+
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)
 - P2: Voice input, body-map symptom input, notification email/SMS, counterfeit pill detection, real wearable integrations
