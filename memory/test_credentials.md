@@ -13,4 +13,8 @@ All accounts use standard email/password JWT auth (httpOnly cookies).
 
 ## Notes
 - `ALLOW_SELF_ROLE_CHANGE=true` in backend/.env, so the sidebar role toggle works in dev.
-- Any account created via `POST /api/auth/register` starts as `patient` with `sharing_enabled: false`.
+- Any account created via `POST /api/auth/register` starts as `patient` with `sharing_enabled: true`
+  (consent on by default) and **no assigned doctor** — it is invisible to doctors until the patient picks one
+  in Settings or the admin assigns one at `/admin/assignments`.
+- `admin@sihha.ai` is the only `is_admin` account (matched on `ADMIN_EMAIL` in backend/.env) and sees every
+  patient regardless of assignment. All 11 existing patients are currently assigned to `dr.layla@sihha.ai`.

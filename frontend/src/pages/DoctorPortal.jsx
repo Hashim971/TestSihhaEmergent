@@ -10,11 +10,15 @@ export default function DoctorPortal() {
   const [selected, setSelected] = useState(null);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+
+  const loadPatients = () =>
+    api.get("/doctor/patients")
+      .then((r) => { setPatients(r.data); setLoadError(false); })
+      .catch(() => setLoadError(true));
 
   useEffect(() => {
-    if (user.role === "doctor") {
-      api.get("/doctor/patients").then((r) => setPatients(r.data)).catch(() => {});
-    }
+    if (user.role === "doctor") loadPatients();
   }, [user.role]);
 
   const openPatient = async (p) => {
@@ -113,13 +117,22 @@ export default function DoctorPortal() {
     <div className="space-y-8 fade-up" data-testid="doctor-portal-page">
       <div>
         <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3"><Stethoscope className="h-7 w-7 text-forest" /> Doctor Portal</h1>
-        <p className="text-ink-soft mt-1">Patients who have opted in to share their health data.</p>
+        <p className="text-ink-soft mt-1">Patients assigned to you who share their health data.</p>
       </div>
+      {loadError && (
+        <div className="card p-6 flex items-center justify-between gap-4" data-testid="patients-load-error">
+          <p className="text-sm text-ink-soft">Could not load your patient panel.</p>
+          <button onClick={loadPatients} data-testid="retry-patients-btn" className="btn-outline">Try again</button>
+        </div>
+      )}
       {loading && <p className="text-ink-soft text-sm">Loading patient…</p>}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="doctor-patients-list">
-        {patients.length === 0 && (
+        {!loadError && patients.length === 0 && (
           <div className="card p-10 col-span-full text-center">
-            <p className="text-ink-soft">No patients are sharing data yet. Patients enable "Share with Doctors" from their sidebar.</p>
+            <p className="text-ink-soft">
+              No patients in your panel yet. Patients choose their doctor in Settings, and the admin can assign anyone
+              who hasn't.
+            </p>
           </div>
         )}
         {patients.map((p) => (

@@ -14,6 +14,7 @@ import Medications from "./pages/Medications";
 import Dependents from "./pages/Dependents";
 import DoctorPortal from "./pages/DoctorPortal";
 import DoctorSchedule from "./pages/DoctorSchedule";
+import AdminAssignments from "./pages/AdminAssignments";
 import EncounterDetail from "./pages/EncounterDetail";
 import Settings from "./pages/Settings";
 
@@ -33,6 +34,7 @@ export default function App() {
             <Route path="/dependents" element={<Dependents />} />
             <Route path="/doctor" element={<DoctorPortal />} />
             <Route path="/doctor/schedule" element={<DoctorSchedule />} />
+            <Route path="/admin/assignments" element={<AdminAssignments />} />
             <Route path="/doctor/encounters/:id" element={<EncounterDetail />} />
             <Route path="/settings" element={<Settings />} />
           </Route>

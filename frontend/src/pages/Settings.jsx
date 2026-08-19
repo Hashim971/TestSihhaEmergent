@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import YesNo from "../components/YesNo";
+import { MyDoctorCard } from "../components/MyDoctorCard";
 import { Save, User, HeartPulse, Pill, Leaf } from "lucide-react";
 
 const EMPTY = {
@@ -75,6 +76,8 @@ export default function Settings() {
           <p className="text-sm text-ink-soft">{user.email} · {user.role}</p>
         </div>
       </div>
+
+      {user.role === "patient" && <MyDoctorCard />}
 
       <Section icon={User} title="General Information">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

@@ -133,12 +133,13 @@ class TestBriefingGeneration:
         assert after == before + 1
 
     def test_empty_patient_yields_low_confidence(self, doctor, db):
-        ds, _ = doctor
+        ds, doc = doctor
         email = f"TEST_empty_{uuid.uuid4().hex[:8]}@example.com"
         s = requests.Session()
         u = s.post(f"{API}/auth/register", json={"name": "Empty Record", "email": email, "password": "Passw0rd!"},
                    timeout=60).json()
         s.post(f"{API}/auth/sharing", json={"enabled": True}, timeout=60)
+        s.put(f"{API}/profile/doctor", json={"doctor_user_id": doc["user_id"]}, timeout=60)
         try:
             enc = ds.post(f"{API}/encounters", json={"patient_user_id": u["user_id"]}, timeout=60).json()
             art = ds.post(f"{API}/agents/previsit/{enc['encounter_id']}", timeout=120)

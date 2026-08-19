@@ -80,6 +80,27 @@ Also fixed as follow-up: `_decorate_encounters` N+1 lookups (GET /api/encounters
 skeleton on /doctor/schedule so the empty state no longer flashes. Verified by the testing agent —
 `/app/test_reports/iteration_3.json`, 100% backend and frontend.
 
+## Doctor assignment — one doctor per patient (June 2026)
+Consent (`sharing_enabled`) now pairs with assignment (`users.assigned_doctor_user_id`, plus `assigned_by`
+= patient | admin | migration and `assigned_at`). One doctor at a time: choosing a new doctor transfers care and
+revokes the previous doctor immediately.
+- `with_capabilities()` marks the account whose email matches `ADMIN_EMAIL` as `is_admin` (returned from
+  register / login / `/auth/me`); `require_admin` guards the admin routes. The admin keeps full clinical
+  visibility so it can manage assignments.
+- New routes: `GET /api/doctors` (directory: user_id, name, email only), `PUT /api/profile/doctor`
+  (patient picks their doctor), `GET /api/admin/patients`, `PUT /api/admin/patients/{id}/doctor`.
+- `GET /api/doctor/patients` filters on `assigned_doctor_user_id` (admin bypasses) and
+  `assert_doctor_can_access_patient` — the single gate used by the summary route and every Phase 1 agent
+  route — now requires consent AND assignment, returning 403 otherwise.
+- Frontend: `components/MyDoctorCard.jsx` in Settings (patients only, warns if sharing is off),
+  `pages/AdminAssignments.jsx` at `/admin/assignments` with an unassigned-count banner and per-patient
+  doctor dropdown, nav item gated on `user.is_admin`. Doctor Portal now has an explicit load-error retry
+  instead of silently swallowing a failed fetch.
+- Migration `backend/migrations/assign_existing_patients.py` assigned the 12 existing patients to
+  dr.layla@sihha.ai (the admin sees everyone regardless).
+- Tests: `/app/backend/tests/test_assignments.py` — 13 pass; Phase 0 (7) and Phase 1 (16) still pass.
+  Frontend testing agent 8/8 (`/app/test_reports/iteration_4.json`).
+
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)
 - P2: Voice input, body-map symptom input, notification email/SMS, counterfeit pill detection, real wearable integrations

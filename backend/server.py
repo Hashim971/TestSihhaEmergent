@@ -106,6 +106,14 @@ def iso(dt=None):
 JWT_ALGORITHM = "HS256"
 JWT_SECRET = os.environ["JWT_SECRET"]
 USER_PROJECTION = {"_id": 0, "password_hash": 0}
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip().lower()
+
+
+def with_capabilities(user):
+    """Marks the configured admin account. Admins manage doctor-patient assignments."""
+    if user is not None:
+        user["is_admin"] = bool(ADMIN_EMAIL) and (user.get("email") or "").lower() == ADMIN_EMAIL
+    return user
 
 
 def hash_password(password: str) -> str:
@@ -154,7 +162,7 @@ async def get_current_user(request: Request):
     user = await db.users.find_one({"user_id": payload["sub"]}, USER_PROJECTION)
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
-    return user
+    return with_capabilities(user)
 
 
 class RegisterRequest(BaseModel):
@@ -185,11 +193,12 @@ async def register(body: RegisterRequest, response: Response):
         "picture": None,
         "role": "patient",
         "sharing_enabled": True,
+        "assigned_doctor_user_id": None,
         "onboarding_completed": False,
         "created_at": iso(),
     })
     set_auth_cookies(response, create_access_token(user_id, email), create_refresh_token(user_id))
-    return await db.users.find_one({"user_id": user_id}, USER_PROJECTION)
+    return with_capabilities(await db.users.find_one({"user_id": user_id}, USER_PROJECTION))
 
 
 @api.post("/auth/login")
@@ -212,7 +221,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     await db.login_attempts.delete_one({"identifier": identifier})
     set_auth_cookies(response, create_access_token(user["user_id"], email), create_refresh_token(user["user_id"]))
-    return await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION)
+    return with_capabilities(await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION))
 
 
 @api.post("/auth/refresh")
@@ -919,9 +928,78 @@ async def require_doctor(user=Depends(get_current_user)):
     return user
 
 
+async def require_admin(user=Depends(get_current_user)):
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+class DoctorAssignment(BaseModel):
+    doctor_user_id: Optional[str] = None
+
+
+async def _resolve_doctor(doctor_user_id: Optional[str]):
+    if not doctor_user_id:
+        return None
+    doctor = await db.users.find_one({"user_id": doctor_user_id, "role": "doctor"}, USER_PROJECTION)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    return doctor
+
+
+@api.get("/doctors")
+async def list_doctors(user=Depends(get_current_user)):
+    doctors = await db.users.find({"role": "doctor"}, {"_id": 0, "user_id": 1, "name": 1, "email": 1}).to_list(200)
+    return doctors
+
+
+@api.put("/profile/doctor")
+async def choose_my_doctor(body: DoctorAssignment, user=Depends(get_current_user)):
+    """A patient picks the one doctor who may see their record. Choosing a new doctor transfers care."""
+    await _resolve_doctor(body.doctor_user_id)
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"assigned_doctor_user_id": body.doctor_user_id, "assigned_at": iso(),
+                  "assigned_by": "patient" if body.doctor_user_id else None}},
+    )
+    return with_capabilities(await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION))
+
+
+@api.get("/admin/patients")
+async def admin_list_patients(user=Depends(require_admin)):
+    patients = await db.users.find({"role": "patient"}, USER_PROJECTION).sort("created_at", -1).to_list(500)
+    doctors = await db.users.find({"role": "doctor"}, {"_id": 0, "user_id": 1, "name": 1}).to_list(200)
+    names = {d["user_id"]: d["name"] for d in doctors}
+    return [{
+        "user_id": p["user_id"], "name": p.get("name"), "email": p.get("email"),
+        "sharing_enabled": p.get("sharing_enabled", False),
+        "assigned_doctor_user_id": p.get("assigned_doctor_user_id"),
+        "assigned_doctor_name": names.get(p.get("assigned_doctor_user_id")),
+        "assigned_by": p.get("assigned_by"),
+        "created_at": p.get("created_at"),
+    } for p in patients]
+
+
+@api.put("/admin/patients/{patient_user_id}/doctor")
+async def admin_assign_doctor(patient_user_id: str, body: DoctorAssignment, user=Depends(require_admin)):
+    patient = await db.users.find_one({"user_id": patient_user_id, "role": "patient"}, USER_PROJECTION)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    await _resolve_doctor(body.doctor_user_id)
+    await db.users.update_one(
+        {"user_id": patient_user_id},
+        {"$set": {"assigned_doctor_user_id": body.doctor_user_id, "assigned_at": iso(),
+                  "assigned_by": "admin" if body.doctor_user_id else None}},
+    )
+    return await db.users.find_one({"user_id": patient_user_id}, USER_PROJECTION)
+
+
 @api.get("/doctor/patients")
 async def doctor_patients(user=Depends(require_doctor)):
-    patients = await db.users.find({"sharing_enabled": True, "role": "patient"}, USER_PROJECTION).to_list(200)
+    query = {"sharing_enabled": True, "role": "patient"}
+    if not user.get("is_admin"):
+        query["assigned_doctor_user_id"] = user["user_id"]
+    patients = await db.users.find(query, USER_PROJECTION).to_list(200)
     out = []
     for p in patients:
         alerts = await db.alerts.count_documents({"user_id": p["user_id"], "read": False})
@@ -931,9 +1009,7 @@ async def doctor_patients(user=Depends(require_doctor)):
 
 @api.get("/doctor/patients/{patient_id}/summary")
 async def doctor_patient_summary(patient_id: str, user=Depends(require_doctor)):
-    patient = await db.users.find_one({"user_id": patient_id, "sharing_enabled": True}, USER_PROJECTION)
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found or not sharing")
+    patient = await assert_doctor_can_access_patient(db, user, patient_id)
     vitals = await db.vitals.find({"profile_id": patient_id}, {"_id": 0}).sort("recorded_at", -1).to_list(30)
     alerts = await db.alerts.find({"user_id": patient_id}, {"_id": 0}).sort("created_at", -1).to_list(20)
     reports = await db.health_reports.find({"user_id": patient_id}, {"_id": 0}).sort("generated_at", -1).to_list(10)
@@ -959,12 +1035,13 @@ BRIEFING_QA_AGENT = BriefingQAAgent()
 
 
 async def assert_doctor_can_access_patient(db, doctor, patient_user_id: str):
-    """Single gate for every doctor-facing clinical route. Doctor-patient assignment lands here later."""
-    patient = await db.users.find_one(
-        {"user_id": patient_user_id, "sharing_enabled": True}, USER_PROJECTION
-    )
+    """Single gate for every doctor-facing clinical route: consent + assignment (admins see all)."""
+    query = {"user_id": patient_user_id, "sharing_enabled": True}
+    if not doctor.get("is_admin"):
+        query["assigned_doctor_user_id"] = doctor["user_id"]
+    patient = await db.users.find_one(query, USER_PROJECTION)
     if not patient:
-        raise HTTPException(status_code=403, detail="Patient not found or not sharing data")
+        raise HTTPException(status_code=403, detail="Patient is not sharing data or is not assigned to you")
     return patient
 
 

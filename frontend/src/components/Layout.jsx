@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import { toast } from "sonner";
 import {
   LayoutDashboard, MessageSquare, ScanLine, Pill, Users,
-  Stethoscope, Bell, LogOut, Leaf, ChevronDown, Share2, Settings as SettingsIcon, CalendarDays,
+  Stethoscope, Bell, LogOut, Leaf, ChevronDown, Share2, Settings as SettingsIcon, CalendarDays, UserCheck,
 } from "lucide-react";
 
 const navItems = [
@@ -107,6 +107,18 @@ export default function Layout() {
               }
             >
               <CalendarDays className="h-4 w-4" /> Schedule
+            </NavLink>
+          )}
+          {user.is_admin && (
+            <NavLink
+              to="/admin/assignments" data-testid="nav-admin-assignments"
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium ${
+                  isActive ? "bg-forest text-white" : "text-ink-soft hover:bg-sand"
+                }`
+              }
+            >
+              <UserCheck className="h-4 w-4" /> Assignments
             </NavLink>
           )}
         </nav>

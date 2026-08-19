@@ -22,7 +22,7 @@ export default function DoctorSchedule() {
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
-    api.get("/doctor/patients").then((p) => setPatients(p.data)).catch(() => {});
+    api.get("/doctor/patients").then((p) => setPatients(p.data)).catch(() => toast.error("Could not load your patient panel"));
     try {
       const e = await api.get("/encounters");
       setEncounters(e.data);
