@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
-import { Upload, ScanLine, AlertTriangle, CheckCircle2, Clock, ChevronDown } from "lucide-react";
+import { Upload, ScanLine, AlertTriangle, CheckCircle2, Clock, ChevronDown, Plus } from "lucide-react";
 
 export default function PillIdentify() {
   const { activeProfile } = useAuth();
@@ -136,6 +136,58 @@ export default function PillIdentify() {
   );
 }
 
+function AddToMedications({ result }) {
+  const { activeProfile } = useAuth();
+  const [added, setAdded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [times, setTimes] = useState("08:00");
+
+  const add = async () => {
+    const slots = times.split(",").map((t) => t.trim()).filter((t) => /^\d{2}:\d{2}$/.test(t));
+    if (slots.length === 0) return toast.error("Pick a time of day first");
+    setSaving(true);
+    try {
+      await api.post("/medications", {
+        name: result.name,
+        dosage: result.dosage_info?.slice(0, 60) || "As directed",
+        times: times.split(",").map((t) => t.trim()).filter((t) => /^\d{2}:\d{2}$/.test(t)),
+        instructions: "Added from a pill photo — confirm the dose with your pharmacist.",
+        units_per_dose: 1,
+        profile_id: activeProfile.id,
+      });
+      setAdded(true);
+      toast.success(`${result.name} added to your medication schedule`);
+    } catch {
+      toast.error("Could not add that medicine");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (added) {
+    return (
+      <p className="text-sm text-forest flex items-center gap-2" data-testid="pill-added-confirmation">
+        <CheckCircle2 className="h-4 w-4" /> Added to your medications — set the exact times on the Medications page.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border border-line rounded-xl px-3 py-2.5"
+      data-testid="add-pill-to-meds">
+      <span className="text-sm">Take this daily at</span>
+      <input type="time" value={times} onChange={(e) => setTimes(e.target.value)}
+        data-testid="pill-med-times-input"
+        className="border border-line rounded-lg px-2.5 py-1.5 text-sm w-32" />
+      <button onClick={add} disabled={saving} className="btn-primary !py-1.5 !px-3 text-xs"
+        data-testid="add-pill-to-meds-btn">
+        <Plus className="h-3.5 w-3.5" /> {saving ? "Adding…" : "Add to my medications"}
+      </button>
+      <span className="text-xs text-ink-soft">AI identification — check with a pharmacist first.</span>
+    </div>
+  );
+}
+
 function PillResultDetails({ result, cam }) {
   if (!result) return <p className="text-sm text-ink-soft">No details stored for this entry.</p>;
   return (
@@ -157,6 +209,7 @@ function PillResultDetails({ result, cam }) {
         )}
       </div>
       {result.generic_name && <p className="text-sm text-ink-soft">Generic: {result.generic_name}</p>}
+      {result.identified && <AddToMedications result={result} />}
       {result.description && <Section title="Description" body={result.description} />}
       {result.uses && <Section title="Uses" body={result.uses} />}
       {result.dosage_info && <Section title="Dosage" body={result.dosage_info} />}

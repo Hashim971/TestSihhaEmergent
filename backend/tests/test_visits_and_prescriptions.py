@@ -225,6 +225,87 @@ class TestBooking:
         pytest.rx_encounter_id = enc["encounter_id"]
 
 
+class TestRescheduleAndAlertGroups:
+    def test_patient_moves_a_visit_without_rebooking(self, patient, doctor, db):
+        ps, _ = patient
+        _, doc = doctor
+        slots = ps.get(f"{API}/booking/slots", params={"doctor_user_id": doc["user_id"]},
+                       timeout=60).json()["slots"]
+        booked = ps.post(f"{API}/booking", json={"doctor_user_id": doc["user_id"],
+                                                 "slot_start": slots[0]["start"],
+                                                 "reason_for_visit": "Reschedule test"}, timeout=60).json()
+        fresh = ps.get(f"{API}/booking/slots", params={"doctor_user_id": doc["user_id"]},
+                       timeout=60).json()["slots"]
+        target = fresh[0]
+        moved = ps.post(f"{API}/encounters/{booked['encounter_id']}/reschedule",
+                        json={"slot_start": target["start"]}, timeout=60)
+        assert moved.status_code == 200, moved.text
+        body = moved.json()
+        assert body["scheduled_at"] == target["start"] and body["slot_label"] == target["label"]
+        assert body["status"] == "scheduled", "rescheduling must not cancel the visit"
+        assert body["reschedule_history"][-1]["to"] == target["label"]
+        assert db.alerts.find_one({"user_id": doc["user_id"], "type": "appointment",
+                                   "message": {"$regex": "moved the visit"}})
+
+        # The old time is free again and the new time is not offered twice.
+        after = [s["start"] for s in ps.get(f"{API}/booking/slots",
+                                            params={"doctor_user_id": doc["user_id"]},
+                                            timeout=60).json()["slots"]]
+        assert slots[0]["start"] in after and target["start"] not in after
+
+        taken = ps.post(f"{API}/encounters/{booked['encounter_id']}/reschedule",
+                        json={"slot_start": target["start"]}, timeout=60)
+        assert taken.status_code == 409, "its own slot is no longer open"
+        ps.post(f"{API}/encounters/{booked['encounter_id']}/cancel", timeout=60)
+        assert ps.post(f"{API}/encounters/{booked['encounter_id']}/reschedule",
+                       json={"slot_start": slots[1]["start"]}, timeout=60).status_code == 409
+
+    def test_a_stranger_cannot_move_my_visit(self, patient, doctor):
+        ps, _ = patient
+        _, doc = doctor
+        slots = ps.get(f"{API}/booking/slots", params={"doctor_user_id": doc["user_id"]},
+                       timeout=60).json()["slots"]
+        enc = ps.post(f"{API}/booking", json={"doctor_user_id": doc["user_id"],
+                                              "slot_start": slots[0]["start"]}, timeout=60).json()
+        other, _ = login(SAMI)
+        assert other.post(f"{API}/encounters/{enc['encounter_id']}/reschedule",
+                          json={"slot_start": slots[1]["start"]}, timeout=60).status_code == 403
+        ps.post(f"{API}/encounters/{enc['encounter_id']}/cancel", timeout=60)
+
+    def test_my_visits_lists_upcoming_with_the_clinician(self, patient):
+        ps, _ = patient
+        body = ps.get(f"{API}/my-visits", timeout=60).json()
+        assert "upcoming" in body and "past" in body
+        for visit in body["upcoming"]:
+            assert visit["scheduled_at"] >= iso() and visit["status"] in ("scheduled", "in_progress")
+            assert visit["doctor"]["name"]
+
+    def test_clearing_an_alert_group_clears_every_alert_in_it(self, patient, db):
+        ps, me = patient
+        for i in range(3):
+            db.alerts.insert_one({"alert_id": f"alert_test_{uuid.uuid4().hex[:8]}", "user_id": me["user_id"],
+                                  "profile_id": me["user_id"], "type": "grouptest", "severity": "info",
+                                  "message": f"test alert {i}", "read": False, "created_at": iso()})
+        r = ps.post(f"{API}/alerts/read-group", json={"type": "grouptest", "severity": "info"}, timeout=60)
+        assert r.status_code == 200 and r.json()["cleared"] == 3
+        assert db.alerts.count_documents({"user_id": me["user_id"], "type": "grouptest", "read": False}) == 0
+        assert ps.post(f"{API}/alerts/read-group", json={"type": "grouptest"},
+                       timeout=60).json()["cleared"] == 0
+        db.alerts.delete_many({"type": "grouptest"})
+
+    def test_a_group_clear_only_touches_my_own_alerts(self, patient, doctor, db):
+        ps, me = patient
+        _, doc = doctor
+        db.alerts.insert_one({"alert_id": f"alert_test_{uuid.uuid4().hex[:8]}", "user_id": doc["user_id"],
+                              "profile_id": doc["user_id"], "type": "grouptest", "severity": "info",
+                              "message": "doctor alert", "read": False, "created_at": iso()})
+        assert ps.post(f"{API}/alerts/read-group", json={"type": "grouptest"},
+                       timeout=60).json()["cleared"] == 0
+        assert db.alerts.count_documents({"user_id": doc["user_id"], "type": "grouptest",
+                                          "read": False}) == 1
+        db.alerts.delete_many({"type": "grouptest"})
+
+
 class TestPrescriptions:
     def test_doctor_writes_a_draft_and_controlled_items_are_flagged(self, doctor):
         ds, _ = doctor

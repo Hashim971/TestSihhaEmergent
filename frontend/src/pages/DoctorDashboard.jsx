@@ -127,7 +127,7 @@ export default function DoctorDashboard() {
         </div>
 
         <div className="space-y-6">
-          <AlertGroups groups={data.alert_groups || []} />
+          <AlertGroups groups={data.alert_groups || []} onCleared={load} />
 
           <div className="card p-6" data-testid="dash-recent-runs">
             <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">

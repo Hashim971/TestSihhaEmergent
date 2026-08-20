@@ -585,6 +585,21 @@ async def mark_alert_read(alert_id: str, user=Depends(get_current_user)):
     return {"ok": True}
 
 
+class AlertGroupRead(BaseModel):
+    type: str
+    severity: Optional[str] = None
+
+
+@api.post("/alerts/read-group")
+async def mark_alert_group_read(body: AlertGroupRead, user=Depends(get_current_user)):
+    """Clears a whole group of alerts at once, not just the few shown in the card."""
+    query = {"user_id": user["user_id"], "type": body.type, "read": False}
+    if body.severity:
+        query["severity"] = body.severity
+    result = await db.alerts.update_many(query, {"$set": {"read": True, "read_at": iso()}})
+    return {"cleared": result.modified_count}
+
+
 # ---------- Health Chat / Screening ----------
 class ChatSessionCreate(BaseModel):
     profile_id: Optional[str] = None
@@ -2929,7 +2944,61 @@ async def cancel_visit(encounter_id: str, user=Depends(get_current_user)):
     return await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
 
 
+class RescheduleIn(BaseModel):
+    slot_start: str
+
+
+@api.post("/encounters/{encounter_id}/reschedule")
+async def reschedule_visit(encounter_id: str, body: RescheduleIn, user=Depends(get_current_user)):
+    """Moves a booked visit to another open time with the same clinician — no cancel-and-rebook."""
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Visit not found")
+    if user["user_id"] not in (enc["patient_user_id"], enc["doctor_user_id"]) and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="This visit belongs to someone else")
+    if enc["status"] != "scheduled":
+        raise HTTPException(status_code=409, detail=f"A visit that is {enc['status']} cannot be moved")
+    slot = next((s for s in await _open_slots(enc["doctor_user_id"], days=60)
+                 if s["start"] == body.slot_start), None)
+    if not slot:
+        raise HTTPException(status_code=409, detail="That time is no longer available. Pick another slot.")
+    previous = enc.get("slot_label") or enc["scheduled_at"][:16]
+    await db.encounters.update_one(
+        {"encounter_id": encounter_id},
+        {"$set": {"scheduled_at": slot["start"], "slot_label": slot["label"], "updated_at": iso(),
+                  "rescheduled_by": user["user_id"], "rescheduled_at": iso()},
+         "$push": {"reschedule_history": {"from": previous, "to": slot["label"], "at": iso(),
+                                          "by": user["user_id"]}}})
+    other = enc["doctor_user_id"] if user["user_id"] == enc["patient_user_id"] else enc["patient_user_id"]
+    await db.alerts.insert_one({
+        "alert_id": f"alert_{uuid.uuid4().hex[:12]}",
+        "user_id": other, "profile_id": other, "type": "appointment", "severity": "info",
+        "message": f"{user.get('name')} moved the visit from {previous} to {slot['label']}",
+        "encounter_id": encounter_id, "read": False, "created_at": iso(),
+    })
+    return await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+
+
+@api.get("/my-visits")
+async def my_visits(user=Depends(get_current_user)):
+    """Upcoming and recent visits for the signed-in patient, with the clinician's details."""
+    rows = await db.encounters.find({"patient_user_id": user["user_id"]}, {"_id": 0}
+                                    ).sort("scheduled_at", -1).to_list(50)
+    doctors = {d["user_id"]: d for d in await db.users.find(
+        {"user_id": {"$in": list({r["doctor_user_id"] for r in rows})}},
+        {"_id": 0, "user_id": 1, "name": 1, "specialty": 1, "clinic": 1, "city": 1, "clinic_phone": 1},
+    ).to_list(100)} if rows else {}
+    for row in rows:
+        row["doctor"] = doctors.get(row["doctor_user_id"])
+    upcoming = [r for r in rows if r["status"] in ("scheduled", "in_progress")
+                and r["scheduled_at"] >= iso()]
+    upcoming.sort(key=lambda r: r["scheduled_at"])
+    return {"upcoming": upcoming, "past": [r for r in rows if r not in upcoming][:10]}
 # ---------- Doctor-written prescriptions ----------
+
+
+
+
 class RxItemIn(BaseModel):
     drug_name: str
     generic_name: str = ""

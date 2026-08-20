@@ -12,6 +12,7 @@ import { IntakeCard } from "../components/IntakeCard";
 import { ScreeningCard } from "../components/ScreeningCard";
 import { ScribePanel } from "../components/ScribePanel";
 import { PrescriptionWriter } from "../components/PrescriptionWriter";
+import { BriefingExportButton } from "../components/BriefingExportButton";
 
 const EMPTY = {
   headline: "", chief_concerns: [], vitals_summary: [], medication_review: [],
@@ -211,9 +212,13 @@ export default function EncounterDetail() {
       {artifact && !generating && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           <div className="xl:col-span-2 space-y-6">
-            <div className="border border-line bg-sand rounded-xl px-4 py-3 text-xs font-medium text-ink-soft"
+            <div className="border border-line bg-sand rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-2"
               data-testid="ai-draft-banner">
-              AI-generated draft — for clinician review. Not a diagnosis.
+              <span className="text-xs font-medium text-ink-soft">
+                AI-generated draft — for clinician review. Not a diagnosis.
+              </span>
+              <BriefingExportButton artifact={artifact} content={draft} patientName={patient?.name}
+                encounter={encounter} />
             </div>
 
             {draft.confidence === "low" && (

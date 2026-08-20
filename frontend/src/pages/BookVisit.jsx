@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { toast } from "sonner";
 import { CalendarDays, PhoneCall, Stethoscope, Search, CheckCircle2 } from "lucide-react";
+import { UpcomingVisits } from "../components/UpcomingVisits";
 
 export default function BookVisit() {
   const [params] = useSearchParams();
@@ -14,6 +15,7 @@ export default function BookVisit() {
   const [slots, setSlots] = useState([]);
   const [reason, setReason] = useState(params.get("reason") || "");
   const [booking, setBooking] = useState(false);
+  const [visitsKey, setVisitsKey] = useState(0);
   const reportId = params.get("report");
 
   const loadDoctors = (s, c) => {
@@ -40,6 +42,7 @@ export default function BookVisit() {
         reason_for_visit: reason, report_id: reportId || null,
       });
       toast.success(`Booked with ${data.doctor_name} — ${data.slot_label}`);
+      setVisitsKey((k) => k + 1);
       navigate("/dashboard");
     } catch (e) {
       toast.error(typeof e?.response?.data?.detail === "string"
@@ -64,6 +67,8 @@ export default function BookVisit() {
           covers it — booking with them lets them read your record for this visit.
         </p>
       </div>
+
+      <UpcomingVisits reloadKey={visitsKey} />
 
       <div className="card p-5 space-y-3">
         <label className="text-sm block">

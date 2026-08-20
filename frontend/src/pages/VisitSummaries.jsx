@@ -1,6 +1,34 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { FileHeart, AlertTriangle, Languages, Stethoscope } from "lucide-react";
+import { FileHeart, AlertTriangle, Languages, Stethoscope, Printer, Share2 } from "lucide-react";
+
+import { toast } from "sonner";
+
+const shareSummary = async (row, body, rtl) => {
+  const lines = [
+    `${rtl ? "ملخص الزيارة" : "Visit summary"} — ${row.doctor_name || ""} (${new Date(row.published_at).toLocaleDateString()})`,
+    body.what_we_discussed, body.diagnosis_plain,
+    ...(body.medications || []).map((m) => `• ${m.name}${m.instructions ? ` — ${m.instructions}` : ""}`),
+    ...(body.next_steps || []).map((s) => `• ${s}`),
+    (body.red_flags || []).length ? (rtl ? "راجع الطبيب فوراً إذا:" : "Seek care right away if:") : "",
+    ...(body.red_flags || []).map((s) => `• ${s}`),
+  ].filter(Boolean).join("\n\n");
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: "Sihha visit summary", text: lines });
+      return;
+    } catch {
+      /* user dismissed the share sheet — fall through to copying */
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(lines);
+    toast.success("Summary copied — paste it to whoever needs it");
+  } catch {
+    toast.error("Could not share this summary on this device");
+  }
+};
 
 const LANGS = [
   { code: "ar", label: "العربية" },
@@ -62,6 +90,16 @@ export default function VisitSummaries() {
                   {new Date(row.published_at).toLocaleDateString()}
                 </p>
               </div>
+              <div className="flex items-center gap-2 no-print">
+                <button onClick={() => shareSummary(row, body, rtl)} className="btn-outline !py-1.5 !px-3 text-xs"
+                  data-testid={`share-summary-${row.artifact_id}`}>
+                  <Share2 className="h-3.5 w-3.5" /> Share
+                </button>
+                <button onClick={() => window.print()} className="btn-outline !py-1.5 !px-3 text-xs"
+                  data-testid={`print-summary-${row.artifact_id}`}>
+                  <Printer className="h-3.5 w-3.5" /> Print
+                </button>
+              </div>
             </div>
 
             <div className={`mt-4 space-y-4 ${rtl ? "text-right" : ""}`} dir={rtl ? "rtl" : "ltr"}>
@@ -114,8 +152,7 @@ export default function VisitSummaries() {
   );
 }
 
-const Section = ({ label, text }) =>
-  text ? (
+const Section = ({ label, text }) =>  text ? (
     <div>
       <p className="text-[10px] uppercase tracking-[0.15em] text-ink-soft mb-1">{label}</p>
       <p className="text-sm leading-relaxed">{text}</p>

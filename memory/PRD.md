@@ -312,6 +312,22 @@ Answers "does this screening need a visit, and how does it get booked?" plus e-p
   frontend testing agent iteration_11: 8/8 flows, no issues. Stale directory-field whitelists updated for
   the new `clinic_phone`.
 
+## Backlog batch A — alerts, directory, sharing, reschedule (June 2026)
+- **Alert group dismissal**: `POST /api/alerts/read-group {type, severity?}` clears every unread alert in that
+  group for the signed-in user only; the doctor dashboard card gained a "Clear all" per group and reloads after.
+- **Doctor directory**: `GET /api/doctors` now filters by `specialty` and `city`; `MyDoctorCard` is a browsable
+  card grid (specialty/city filters, current doctor badged, choose/remove per card) instead of a dropdown.
+- **Add to my medications**: an identified pill can be pushed straight into the schedule from `/pill`
+  (time-of-day picker, validated `HH:MM`, instruction noting the dose must be confirmed with a pharmacist).
+- **Summary sharing**: `/visits` cards can Share (Web Share API, clipboard fallback) or Print — added a
+  `@media print` block that hides chrome and keeps cards on one page.
+- **Briefing export**: `BriefingExportButton` renders the pre-visit briefing to PDF with jsPDF (headline, concerns,
+  vitals, medication review, discussion points, data gaps, signature state).
+- **Reschedule flow**: `POST /api/encounters/{id}/reschedule` moves a visit to another open slot with the same
+  clinician, keeps it `scheduled`, records `reschedule_history` and alerts the other side; `GET /api/my-visits`
+  feeds the new `UpcomingVisits` block at the top of `/book` (reschedule + cancel inline).
+- Tests: `TestRescheduleAndAlertGroups` (5 integration tests) pass; frontend testing agent iteration_12: 7/7 flows.
+
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)
 - P2: Voice input, body-map symptom input, notification email/SMS, counterfeit pill detection, real wearable integrations
