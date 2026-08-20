@@ -163,6 +163,22 @@ flipped seeded patients into doctors and corrupted panel data during test runs.
 Tests: `/app/backend/tests/test_screening_findings.py` — 12 pass; frontend testing agent 9/9
 (`/app/test_reports/iteration_6.json`).
 
+## Clinician workspace + split sign-in (June 2026)
+Doctors no longer see patient tooling. `Layout.jsx` now picks between `patientNav` and `doctorNav`
+(Dashboard, Patients, Schedule, Settings — plus Assignments for the admin); the sharing toggle and the
+dependent profile switcher are patient-only, replaced by a "Clinician workspace" label.
+New `pages/DoctorDashboard.jsx` at `/doctor` (the old portal moved to `/doctor/patients`, headed "My Patients"),
+fed by `GET /api/doctor/dashboard`: panel size, visits today/this week, briefings to write, drafts awaiting
+signature, intakes waiting on patients, unread alerts across the panel and recent agent runs with latency.
+Split sign-in: `/auth` (patients) and `/auth/clinician` (`Auth.jsx` takes a `portal` prop), cross-linked, with
+mismatched credentials refused on both sides ("use the patient/clinician sign-in") and immediately logged out.
+The landing page has separate Patient and Clinician entry points in the header and hero.
+Clinician signup exists but grants nothing: `POST /api/auth/register` with `requested_role: "doctor"` creates a
+normal patient flagged `clinician_requested`, and only the admin can promote via `PUT /api/admin/users/{id}/role`
+(demotion returns 409 while patients are still assigned). Approve button lives on `/admin/assignments`.
+Tests: `/app/backend/tests/test_doctor_workspace.py` — 12 pass; frontend testing agent 8/8
+(`/app/test_reports/iteration_7.json`).
+
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)
 - P2: Voice input, body-map symptom input, notification email/SMS, counterfeit pill detection, real wearable integrations

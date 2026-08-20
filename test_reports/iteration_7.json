@@ -1,0 +1,34 @@
+{
+  "summary": "Frontend-only e2e test of the split patient/clinician portals, new doctor dashboard, cross-portal refusal, clinician access-request + admin-approval flow, and regressions on patients/schedule/encounter pages. All acceptance criteria pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "test_results": {
+    "landing_split_entry_points": "PASS — login-btn, clinician-login-btn, hero-cta-btn, hero-clinician-btn all present; clinician-login-btn routes to /auth/clinician (doctor-auth-card), and cross-links switch-to-patient-auth / switch-to-doctor-auth work.",
+    "doctor_sign_in_and_dashboard": "PASS — dr.layla@sihha.ai/Doctor@123 lands on /doctor showing doctor-dashboard-page, all four stat cards (stat-patients, stat-week, stat-needs-briefing, stat-awaiting-signature) and all six panels (dash-today, dash-needs-briefing, dash-awaiting-signature, dash-awaiting-intake, dash-alerts, dash-recent-runs). dash-schedule-link navigates to /doctor/schedule and dash-patients-link is present.",
+    "doctor_sidebar_clinician_only": "PASS — sidebar has only nav-doctor-dashboard, nav-doctor, nav-doctor-schedule, nav-settings. nav-chat, nav-pill-id, nav-medications, nav-dependents, nav-dashboard, toggle-sharing-btn, and profile-switcher-btn are ABSENT. doctor-context-label ('Clinician workspace') is shown.",
+    "patient_side_unchanged": "PASS — omar.patient@sihha.ai lands on /dashboard with nav-dashboard, nav-chat, nav-pill-id, nav-medications, nav-dependents, nav-settings, profile-switcher-btn and toggle-sharing-btn all present.",
+    "cross_portal_refusal": "PASS — /auth with dr.layla creds shows auth-error 'This is a clinician account. Use the clinician sign-in instead.' and stays on /auth. /auth/clinician with omar creds shows 'This account isn't a clinician account. Use the patient sign-in instead.' and stays on /auth/clinician.",
+    "clinician_access_request": "PASS — auth-tab-register on /auth/clinician submitted with a fresh email produces clinician-request-sent ('Request received'). Immediately re-signing in on /auth/clinician with the same creds is refused with the patient-account auth-error (still a patient role until approval).",
+    "admin_approval": "PASS — admin@sihha.ai/Admin@123 signs in on /auth/clinician (admin has role=doctor and is redirected to /doctor). /admin/assignments shows assignment-row-{user_id} for the new applicant with an approve-clinician-{user_id} button. Clicking it (auto-accepting the confirm dialog) succeeds and the button is removed for the row.",
+    "post_approval_sign_in": "PASS — the newly approved account signs in on /auth/clinician, lands on /doctor, and doctor-dashboard-page renders with stat-patients = 0.",
+    "regression_patients_schedule_encounter": "PASS — /doctor/patients renders the 'My Patients' heading. /doctor/schedule loads (URL correct). /doctor/encounters/enc_fc5e6d2f320f renders the intake questionnaire (Pre-Visit Intake, 8 answered questions) and the AI Screenings section (briefing section further down was not explicitly asserted via testid but section headers render — see minor note)."
+  },
+  "critical_code_review_comments": [
+    "DoctorDashboard.jsx line 86 shows 'Loading your day…' until the first /api/doctor/dashboard resolves; this can flash briefly on slow networks but is not a bug.",
+    "Auth.jsx correctly refuses cross-portal logins client-side by inspecting the user.role returned from /api/auth/login and immediately calling logout; there is no unauthenticated leak.",
+    "Layout.jsx cleanly separates patientNav vs doctorNav and hides toggle-sharing-btn / profile-switcher-btn for role=doctor. doctor-context-label is rendered instead."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
+  "test_credentials": "Used seeded credentials from /app/memory/test_credentials.md (dr.layla, omar.patient, admin). Created throwaway clinician-request account tclin1787225224@example.com / TestPass@123 (now approved to role=doctor with 0 patients).",
+  "seed_data_creation": "Registered one throwaway clinician-request account tclin1787225224@example.com (approved). Prior test agent left 4 additional test_clin_*@example.com pending-clinician accounts visible in /admin/assignments (test_clin_de10f1e6, test_clin_1f98312e, test_clin_e9ab91f7, test_clin_909b4a0b). None have patients assigned; safe to leave or remove.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Everything on this iteration passed. When testing admin flows, remember admin@sihha.ai has role=doctor so it must sign in via /auth/clinician (or would be blocked by the cross-portal guard on /auth). /doctor is the new dashboard route; the old patient /dashboard route is patient-only. Test throwaway clinician tclin1787225224@example.com (password TestPass@123) is now an approved doctor with 0 patients if you need one.",
+  "rca_of_the_issue": "n/a — no defects found in scoped features."
+}

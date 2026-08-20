@@ -8,12 +8,19 @@ import {
   Stethoscope, Bell, LogOut, Leaf, ChevronDown, Share2, Settings as SettingsIcon, CalendarDays, UserCheck,
 } from "lucide-react";
 
-const navItems = [
+const patientNav = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
   { to: "/chat", label: "Health Chat", icon: MessageSquare, testid: "nav-chat" },
   { to: "/pill-id", label: "Pill ID", icon: ScanLine, testid: "nav-pill-id" },
   { to: "/medications", label: "Medications", icon: Pill, testid: "nav-medications" },
   { to: "/dependents", label: "Dependents", icon: Users, testid: "nav-dependents" },
+  { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
+];
+
+const doctorNav = [
+  { to: "/doctor", label: "Dashboard", icon: LayoutDashboard, testid: "nav-doctor-dashboard" },
+  { to: "/doctor/patients", label: "Patients", icon: Stethoscope, testid: "nav-doctor" },
+  { to: "/doctor/schedule", label: "Schedule", icon: CalendarDays, testid: "nav-doctor-schedule" },
   { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
 ];
 
@@ -73,9 +80,9 @@ export default function Layout() {
           <span className="font-heading font-bold text-xl text-forest">Sihha AI</span>
         </div>
         <nav className="flex-1 px-3 py-6 space-y-1">
-          {navItems.map(({ to, label, icon: Icon, testid }) => (
+          {(user.role === "doctor" ? doctorNav : patientNav).map(({ to, label, icon: Icon, testid }) => (
             <NavLink
-              key={to} to={to} data-testid={testid}
+              key={to} to={to} end={to === "/doctor"} data-testid={testid}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium ${
                   isActive ? "bg-forest text-white" : "text-ink-soft hover:bg-sand"
@@ -85,30 +92,6 @@ export default function Layout() {
               <Icon className="h-4 w-4" /> {label}
             </NavLink>
           ))}
-          {user.role === "doctor" && (
-            <NavLink
-              to="/doctor" data-testid="nav-doctor"
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium ${
-                  isActive ? "bg-forest text-white" : "text-ink-soft hover:bg-sand"
-                }`
-              }
-            >
-              <Stethoscope className="h-4 w-4" /> Doctor Portal
-            </NavLink>
-          )}
-          {user.role === "doctor" && (
-            <NavLink
-              to="/doctor/schedule" data-testid="nav-doctor-schedule"
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium ${
-                  isActive ? "bg-forest text-white" : "text-ink-soft hover:bg-sand"
-                }`
-              }
-            >
-              <CalendarDays className="h-4 w-4" /> Schedule
-            </NavLink>
-          )}
           {user.is_admin && (
             <NavLink
               to="/admin/assignments" data-testid="nav-admin-assignments"
@@ -129,18 +112,25 @@ export default function Layout() {
               {user.role === "doctor" ? "Switch to Patient" : "Switch to Doctor"}
             </button>
           )}
-          <button onClick={toggleSharing} data-testid="toggle-sharing-btn"
-            className={`btn-outline w-full justify-center text-xs ${user.sharing_enabled ? "!bg-sage/30 !border-sage" : ""}`}>
-            <Share2 className="h-3.5 w-3.5" />
-            {user.sharing_enabled ? "Sharing: ON" : "Share with Doctors"}
-          </button>
+          {user.role !== "doctor" && (
+            <button onClick={toggleSharing} data-testid="toggle-sharing-btn"
+              className={`btn-outline w-full justify-center text-xs ${user.sharing_enabled ? "!bg-sage/30 !border-sage" : ""}`}>
+              <Share2 className="h-3.5 w-3.5" />
+              {user.sharing_enabled ? "Sharing: ON" : "Share with Doctors"}
+            </button>
+          )}
         </div>
       </aside>
 
       {/* Main */}
       <div className="flex-1 md:ml-60 flex flex-col min-h-screen">
         <header className="sticky top-0 z-10 bg-white/90 backdrop-blur-md border-b border-line px-6 py-3 flex items-center justify-between">
-          {/* Profile switcher */}
+          {/* Profile switcher — dependents are a patient concept */}
+          {user.role === "doctor" ? (
+            <p className="text-sm font-medium text-ink-soft" data-testid="doctor-context-label">
+              Clinician workspace{user.is_admin ? " · Admin" : ""}
+            </p>
+          ) : (
           <div className="relative">
             <button
               onClick={() => setShowProfiles(!showProfiles)}
@@ -176,6 +166,7 @@ export default function Layout() {
               </div>
             )}
           </div>
+          )}
 
           <div className="flex items-center gap-3">
             {/* Alerts */}

@@ -171,6 +171,7 @@ class RegisterRequest(BaseModel):
     name: str = Field(min_length=1)
     email: str
     password: str = Field(min_length=6)
+    requested_role: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -194,6 +195,7 @@ async def register(body: RegisterRequest, response: Response):
         "password_hash": hash_password(body.password),
         "picture": None,
         "role": "patient",
+        "clinician_requested": body.requested_role == "doctor",
         "sharing_enabled": True,
         "assigned_doctor_user_id": None,
         "onboarding_completed": False,
@@ -977,6 +979,30 @@ async def choose_my_doctor(body: DoctorAssignment, user=Depends(get_current_user
     return with_capabilities(await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION))
 
 
+class RoleAssignment(BaseModel):
+    role: str
+
+
+@api.put("/admin/users/{user_id}/role")
+async def admin_set_role(user_id: str, body: RoleAssignment, user=Depends(require_admin)):
+    """The only way an account becomes a clinician."""
+    if body.role not in ("patient", "doctor"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+    target = await db.users.find_one({"user_id": user_id}, USER_PROJECTION)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if body.role == "patient":
+        assigned = await db.users.count_documents({"assigned_doctor_user_id": user_id})
+        if assigned:
+            raise HTTPException(status_code=409, detail=f"{assigned} patient(s) are assigned to this doctor")
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {"role": body.role, "clinician_requested": False,
+                  "assigned_doctor_user_id": None if body.role == "doctor" else target.get("assigned_doctor_user_id")}},
+    )
+    return await db.users.find_one({"user_id": user_id}, USER_PROJECTION)
+
+
 @api.get("/admin/patients")
 async def admin_list_patients(user=Depends(require_admin)):
     patients = await db.users.find({"role": "patient"}, USER_PROJECTION).sort("created_at", -1).to_list(500)
@@ -988,6 +1014,7 @@ async def admin_list_patients(user=Depends(require_admin)):
         "assigned_doctor_user_id": p.get("assigned_doctor_user_id"),
         "assigned_doctor_name": names.get(p.get("assigned_doctor_user_id")),
         "assigned_by": p.get("assigned_by"),
+        "clinician_requested": bool(p.get("clinician_requested")),
         "created_at": p.get("created_at"),
     } for p in patients]
 
@@ -1601,6 +1628,87 @@ async def doctor_screening_view(encounter_id: str, user=Depends(require_doctor))
         })
     return {"encounter_id": encounter_id, "reports": out, "symptom_timeline": timeline["symptoms"],
             "excerpts": excerpts, "stale_after_days": SCREENING_STALE_DAYS}
+
+
+@api.get("/doctor/dashboard")
+async def doctor_dashboard(user=Depends(require_doctor)):
+    """Everything a clinician needs on landing: today's list, what needs review, what's waiting on patients."""
+    patient_query = {"sharing_enabled": True, "role": "patient"}
+    if not user.get("is_admin"):
+        patient_query["assigned_doctor_user_id"] = user["user_id"]
+    patients = await db.users.find(patient_query, {"_id": 0, "user_id": 1, "name": 1}).to_list(300)
+    patient_ids = [p["user_id"] for p in patients]
+    names = {p["user_id"]: p["name"] for p in patients}
+
+    encounters = await db.encounters.find(
+        {"doctor_user_id": user["user_id"]}, {"_id": 0}
+    ).sort("scheduled_at", 1).to_list(400)
+    now = now_utc()
+    today = now.strftime("%Y-%m-%d")
+    week_end = iso(now + timedelta(days=7))
+
+    enc_ids = [e["encounter_id"] for e in encounters]
+    artifacts = await db.clinical_artifacts.find(
+        {"encounter_id": {"$in": enc_ids}, "artifact_type": "previsit_brief"},
+        {"_id": 0, "encounter_id": 1, "status": 1, "artifact_id": 1, "created_at": 1},
+    ).sort("created_at", 1).to_list(400) if enc_ids else []
+    briefings = {a["encounter_id"]: a for a in artifacts}
+    forms = await db.intake_forms.find(
+        {"encounter_id": {"$in": enc_ids}}, {"_id": 0, "encounter_id": 1, "status": 1}
+    ).to_list(400) if enc_ids else []
+    intakes = {f["encounter_id"]: f["status"] for f in forms}
+
+    def row(e):
+        brief = briefings.get(e["encounter_id"])
+        return {
+            "encounter_id": e["encounter_id"],
+            "patient_user_id": e["patient_user_id"],
+            "patient_name": names.get(e["patient_user_id"]),
+            "scheduled_at": e["scheduled_at"],
+            "reason_for_visit": e.get("reason_for_visit"),
+            "status": e["status"],
+            "briefing_status": brief["status"] if brief else None,
+            "intake_status": intakes.get(e["encounter_id"]),
+        }
+
+    upcoming = [e for e in encounters if e["status"] in ("scheduled", "in_progress")]
+    todays = [row(e) for e in upcoming if (e["scheduled_at"] or "")[:10] == today]
+    this_week = [row(e) for e in upcoming if today <= (e["scheduled_at"] or "")[:10] and e["scheduled_at"] <= week_end]
+    needs_briefing = [r for r in this_week if r["briefing_status"] is None]
+    awaiting_signature = [r for r in this_week if r["briefing_status"] in ("draft", "reviewed")]
+    awaiting_intake = [r for r in this_week if r["intake_status"] in ("pending", "partial")]
+
+    alerts = await db.alerts.find(
+        {"user_id": {"$in": patient_ids + [user["user_id"]]}, "read": False}, {"_id": 0}
+    ).sort("created_at", -1).to_list(20)
+    for a in alerts:
+        a["patient_name"] = names.get(a.get("user_id"))
+    runs = await db.agent_runs.find(
+        {"invoked_by_user_id": user["user_id"]},
+        {"_id": 0, "agent_run_id": 1, "agent_type": 1, "status": 1, "latency_ms": 1,
+         "created_at": 1, "patient_user_id": 1, "encounter_id": 1},
+    ).sort("created_at", -1).to_list(8)
+    for r in runs:
+        r["patient_name"] = names.get(r.get("patient_user_id"))
+
+    return {
+        "stats": {
+            "patients": len(patients),
+            "today": len(todays),
+            "this_week": len(this_week),
+            "needs_briefing": len(needs_briefing),
+            "awaiting_signature": len(awaiting_signature),
+            "awaiting_intake": len(awaiting_intake),
+            "unread_alerts": len(alerts),
+        },
+        "todays_visits": todays,
+        "upcoming_visits": this_week[:8],
+        "needs_briefing": needs_briefing[:5],
+        "awaiting_signature": awaiting_signature[:5],
+        "awaiting_intake": awaiting_intake[:5],
+        "alerts": alerts[:6],
+        "recent_runs": runs,
+    }
 
 
 @api.get("/")

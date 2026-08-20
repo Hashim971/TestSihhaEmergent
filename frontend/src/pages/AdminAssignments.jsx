@@ -49,6 +49,20 @@ export default function AdminAssignments() {
     }
   };
 
+  const promote = async (patientId, name) => {
+    if (!window.confirm(`Approve ${name} as a clinician? They will be able to open assigned patient records.`)) return;
+    setSavingId(patientId);
+    try {
+      await api.put(`/admin/users/${patientId}/role`, { role: "doctor" });
+      toast.success(`${name} is now a clinician`);
+      await load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not approve clinician access");
+    } finally {
+      setSavingId(null);
+    }
+  };
+
   if (!user.is_admin) {
     return (
       <div className="card p-10 text-center max-w-lg mx-auto fade-up" data-testid="admin-access-denied">
@@ -119,6 +133,13 @@ export default function AdminAssignments() {
                   <option key={d.user_id} value={d.user_id}>{d.name}</option>
                 ))}
               </select>
+              {p.clinician_requested && (
+                <button onClick={() => promote(p.user_id, p.name)} disabled={savingId === p.user_id}
+                  data-testid={`approve-clinician-${p.user_id}`}
+                  className="btn-outline !py-1 !px-3 text-xs mt-2 !border-forest">
+                  Approve clinician access
+                </button>
+              )}
             </div>
           </div>
         ))}

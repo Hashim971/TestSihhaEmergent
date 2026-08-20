@@ -13,6 +13,7 @@ import PillIdentify from "./pages/PillIdentify";
 import Medications from "./pages/Medications";
 import Dependents from "./pages/Dependents";
 import DoctorPortal from "./pages/DoctorPortal";
+import DoctorDashboard from "./pages/DoctorDashboard";
 import DoctorSchedule from "./pages/DoctorSchedule";
 import AdminAssignments from "./pages/AdminAssignments";
 import Intake from "./pages/Intake";
@@ -26,6 +27,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/auth" element={<Auth />} />
+          <Route path="/auth/clinician" element={<Auth portal="doctor" />} />
           <Route path="/onboarding" element={<Onboarding />} />
           <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route path="/dashboard" element={<Dashboard />} />
@@ -33,7 +35,8 @@ export default function App() {
             <Route path="/pill-id" element={<PillIdentify />} />
             <Route path="/medications" element={<Medications />} />
             <Route path="/dependents" element={<Dependents />} />
-            <Route path="/doctor" element={<DoctorPortal />} />
+            <Route path="/doctor" element={<DoctorDashboard />} />
+            <Route path="/doctor/patients" element={<DoctorPortal />} />
             <Route path="/doctor/schedule" element={<DoctorSchedule />} />
             <Route path="/admin/assignments" element={<AdminAssignments />} />
             <Route path="/intake/:encounterId" element={<Intake />} />

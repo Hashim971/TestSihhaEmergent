@@ -11,6 +11,11 @@ All accounts use standard email/password JWT auth (httpOnly cookies).
 - `noura.patient@sihha.ai` / `Patient@123` — patient, diabetic, low adherence (~62%), sharing ON
 - `sami.patient@sihha.ai` / `Patient@123` — patient, stable, sharing ON
 
+## Sign-in pages
+- Patients: `/auth` · Clinicians: `/auth/clinician` (separate pages; using the wrong one is refused).
+- Clinician self-signup only creates a pending request (`clinician_requested`); the admin approves it from
+  `/admin/assignments`, which calls `PUT /api/admin/users/{user_id}/role`.
+
 ## Notes
 - `ALLOW_SELF_ROLE_CHANGE=false` in backend/.env — self role switching returns 403 and the sidebar toggle is
   only rendered for the admin account. Change roles directly in Mongo or via the admin if a doctor is needed.

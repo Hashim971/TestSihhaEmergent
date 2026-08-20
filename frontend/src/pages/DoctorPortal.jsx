@@ -116,7 +116,7 @@ export default function DoctorPortal() {
   return (
     <div className="space-y-8 fade-up" data-testid="doctor-portal-page">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3"><Stethoscope className="h-7 w-7 text-forest" /> Doctor Portal</h1>
+        <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3"><Stethoscope className="h-7 w-7 text-forest" /> My Patients</h1>
         <p className="text-ink-soft mt-1">Patients assigned to you who share their health data.</p>
       </div>
       {loadError && (

@@ -17,8 +17,9 @@ const features = [
 export default function Landing() {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
-  if (!loading && user) return <Navigate to="/dashboard" replace />;
+  if (!loading && user) return <Navigate to={user.role === "doctor" ? "/doctor" : "/dashboard"} replace />;
   const handleLogin = () => navigate("/auth");
+  const handleClinicianLogin = () => navigate("/auth/clinician");
 
   return (
     <div className="min-h-screen bg-sand">
@@ -30,9 +31,14 @@ export default function Landing() {
             </div>
             <span className="font-heading font-bold text-xl text-forest">Sihha AI</span>
           </div>
-          <button onClick={handleLogin} data-testid="login-btn" className="btn-primary">
-            Sign In
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={handleClinicianLogin} data-testid="clinician-login-btn" className="btn-outline">
+              <Stethoscope className="h-4 w-4" /> Clinician Sign In
+            </button>
+            <button onClick={handleLogin} data-testid="login-btn" className="btn-primary">
+              Patient Sign In
+            </button>
+          </div>
         </div>
       </header>
 
@@ -48,11 +54,17 @@ export default function Landing() {
             Sihha AI unifies visual, textual and biometric data — identifying medications from a photo,
             screening symptoms like a clinician, and watching your vitals around the clock.
           </p>
-          <div className="mt-8 flex gap-3">
+          <div className="mt-8 flex flex-wrap gap-3">
             <button onClick={handleLogin} data-testid="hero-cta-btn" className="btn-primary text-base px-8 py-3">
               Get Started <ArrowRight className="h-4 w-4" />
             </button>
+            <button onClick={handleClinicianLogin} data-testid="hero-clinician-btn" className="btn-outline text-base px-8 py-3">
+              <Stethoscope className="h-4 w-4" /> I'm a Clinician
+            </button>
           </div>
+          <p className="mt-3 text-xs text-ink-soft">
+            Patients and clinicians sign in separately. Clinician access is approved by an administrator.
+          </p>
         </div>
         <div className="md:col-span-5 fade-up" style={{ animationDelay: "0.15s" }}>
           <img
