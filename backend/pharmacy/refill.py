@@ -41,30 +41,38 @@ def project(med: dict, taken_doses: int, today: datetime = None) -> dict:
             "doses_taken": taken_doses}
 
 
-def match_catalog(med: dict, catalog: list) -> dict:
-    """High confidence only on an exact generic or exact trade-name match. Otherwise no suggestion."""
-    name = _norm(med.get("name"))
-    dosage = _norm(med.get("dosage"))
-    name_with_dose = _norm(f"{med.get('name')} {med.get('dosage')}")
-    candidates = []
+def find_matches(name, strength, catalog, include_controlled=False):
+    """Deterministic name matching: exact generic, exact trade name, or trade name + strength. Nothing fuzzy."""
+    query = _norm(name)
+    dose = _norm(strength)
+    query_with_dose = _norm(f"{name} {strength}")
+    out = []
     for item in catalog:
-        if item.get("is_controlled") or not item.get("active", False):
+        if not item.get("active", False):
             continue
-        strength = _norm(item.get("strength"))
+        if item.get("is_controlled") and not include_controlled:
+            continue
+        item_strength = _norm(item.get("strength"))
         trade_en = _norm(item.get("name_en"))
-        trade_bare = trade_en.replace(strength, "").strip() if strength else trade_en
+        trade_bare = trade_en.replace(item_strength, "").strip() if item_strength else trade_en
         names = {_norm(item.get("generic_name")), trade_en, trade_bare, _norm(item.get("name_ar"))}
         names.discard("")
         score = None
-        if name_with_dose and name_with_dose == trade_en:
+        if query_with_dose and query_with_dose == trade_en:
             score = 0.95
-        elif name and name in names:
-            score = 0.95 if dosage and strength == dosage else 0.85
+        elif query and query in names:
+            score = 0.95 if dose and item_strength == dose else 0.85
         if score:
-            candidates.append((score, item))
+            out.append((score, item))
+    out.sort(key=lambda c: -c[0])
+    return out
+
+
+def match_catalog(med: dict, catalog: list) -> dict:
+    """High confidence only on an exact generic or exact trade-name match. Otherwise no suggestion."""
+    candidates = find_matches(med.get("name"), med.get("dosage"), catalog)
     if not candidates:
         return {"confidence": "none", "item": None, "matches": [], "search_query": med.get("name")}
-    candidates.sort(key=lambda c: -c[0])
     score, item = candidates[0]
     return {"confidence": "high" if score >= 0.85 else "low", "score": score, "item": item,
             "matches": [c[1] for c in candidates if c[0] >= 0.85],

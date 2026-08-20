@@ -109,7 +109,7 @@ class TestPatientChoosesDoctor:
         ps, _ = fresh_patient
         r = ps.get(f"{API}/doctors", timeout=60)
         assert r.status_code == 200 and "password_hash" not in r.text
-        allowed = {"user_id", "name", "email", "specialty", "clinic", "city", "bio"}
+        allowed = {"user_id", "name", "email", "specialty", "clinic", "city", "bio", "clinic_phone"}
         assert all(set(d) <= allowed for d in r.json())
 
 

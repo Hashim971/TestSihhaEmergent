@@ -13,6 +13,8 @@ import PillIdentify from "./pages/PillIdentify";
 import Medications from "./pages/Medications";
 import Dependents from "./pages/Dependents";
 import VisitSummaries from "./pages/VisitSummaries";
+import BookVisit from "./pages/BookVisit";
+import Prescriptions from "./pages/Prescriptions";
 import Pharmacy from "./pages/Pharmacy";
 import PharmacyOrders from "./pages/PharmacyOrders";
 import DoctorPortal from "./pages/DoctorPortal";
@@ -39,6 +41,8 @@ export default function App() {
             <Route path="/medications" element={<Medications />} />
             <Route path="/dependents" element={<Dependents />} />
             <Route path="/visits" element={<VisitSummaries />} />
+            <Route path="/book" element={<BookVisit />} />
+            <Route path="/prescriptions" element={<Prescriptions />} />
             <Route path="/pharmacy" element={<Pharmacy />} />
             <Route path="/pharmacy/orders" element={<PharmacyOrders />} />
             <Route path="/doctor" element={<DoctorDashboard />} />

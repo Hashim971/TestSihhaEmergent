@@ -109,7 +109,7 @@ class TestClinicianProfile:
 
     def test_directory_exposes_only_public_fields(self, patient):
         ps, _ = patient
-        allowed = {"user_id", "name", "email", "specialty", "clinic", "city", "bio"}
+        allowed = {"user_id", "name", "email", "specialty", "clinic", "city", "bio", "clinic_phone"}
         listing = ps.get(f"{API}/doctors", timeout=60).json()
         for d in listing:
             assert set(d).issubset(allowed), set(d) - allowed

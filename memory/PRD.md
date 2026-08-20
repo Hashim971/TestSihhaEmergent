@@ -278,6 +278,40 @@ partners at the top of the catalog and of every refill offer list, with a visibl
   match a real finding or intake answer; the doctor dashboard no longer lists encounters whose patient was
   deleted.
 
+## Phase 7 — Screening triage, self-booking, and doctor prescriptions (June 2026)
+Answers "does this screening need a visit, and how does it get booked?" plus e-prescribing after the visit.
+- **Triage** (`backend/triage/rules.py` + `agents/triage.py`, prompt `triage_v1.md`): after every screening report, a
+  deterministic red-flag scan of the patient's own words (English + Arabic) and their latest vitals sets a **floor**
+  urgency; the LLM may raise it and can never lower it (`rule_floor`, `model_level`, `escalated_by_rules` are all
+  stored). Levels: `emergency_now` / `urgent_24h` / `routine_2w` / `self_care`, each with a timeframe, reasons that
+  may only cite real `finding_id`s, a recommended specialty, a ready-made reason-for-visit line, watch-for signs and
+  (non-emergency only) self-care advice. Emergency and urgent dispositions alert the patient AND their assigned
+  doctor through the existing alerts collection. Route: `POST /api/reports/{id}/triage`; runs automatically inside
+  `POST /api/chat/sessions/{sid}/report`.
+- **Booking** (instant confirmation, no approval step — user's choice): doctors publish weekly hours
+  (`doctor_availability`, `GET/PUT /api/doctor/availability`, clinic-local times via `tz_offset_minutes`);
+  `GET /api/booking/doctors` ranks the patient's own doctor first and filters by specialty/city;
+  `GET /api/booking/slots` subtracts booked encounters, blocked dates and the past; `POST /api/booking` creates the
+  encounter, auto-shares the screening to it and alerts the doctor (warning severity when urgent).
+  **Booking is refused with 409 for an `emergency_now` screening** — that case shows call-997 guidance instead.
+  Booking a clinician who is not the patient's assigned doctor creates a time-boxed `care_grants` record, and
+  `assert_doctor_can_access_patient` now accepts assignment **or** an active grant. `POST /api/encounters/{id}/cancel`
+  frees the slot and notifies the other side.
+- **Doctor prescriptions**: `POST /api/encounters/{id}/prescription` (draft, upserts one draft per encounter),
+  `PATCH /api/prescriptions/{id}`, `POST /api/prescriptions/{id}/sign` (locks it, alerts the patient),
+  `POST /api/prescriptions/{id}/transmit` (partner pharmacy; creates an `awaiting_pharmacist_verification` order for
+  `in_app` partners), `GET /api/prescriptions`, `GET /api/prescriptions/{id}/basket-options` (catalog matches per
+  item, sponsored-first, patient confirms each — never auto-substituted). Controlled medicines are detected against
+  the catalog and marked `dispense_in_clinic`: never transmitted, never orderable. Prescriptions live in the same
+  `prescriptions` collection as uploaded images (`source: "encounter"`), so they attach to a pharmacy basket.
+- **Frontend**: `components/TriageCard.jsx` (full width above /chat), `pages/BookVisit.jsx` at `/book`,
+  `components/AvailabilityCard.jsx` (doctor Settings), `components/PrescriptionWriter.jsx` (encounter detail),
+  `pages/Prescriptions.jsx` at `/prescriptions` with PDF download and the confirm-each-match ordering flow.
+  New patient nav items: Book a Visit, Prescriptions.
+- Tests: `test_triage_rules.py` (20 unit) and `test_visits_and_prescriptions.py` (23 integration) all pass;
+  frontend testing agent iteration_11: 8/8 flows, no issues. Stale directory-field whitelists updated for
+  the new `clinic_phone`.
+
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)
 - P2: Voice input, body-map symptom input, notification email/SMS, counterfeit pill detection, real wearable integrations

@@ -709,6 +709,7 @@ async def generate_report(sid: str, user=Depends(get_current_user)):
     )
     report.pop("_id", None)
     await extract_report_findings(report, invoked_by=user["user_id"])
+    await run_report_triage(report["report_id"], invoked_by=user["user_id"])
     return await db.health_reports.find_one({"report_id": report["report_id"]}, {"_id": 0})
 
 
@@ -981,10 +982,17 @@ async def _resolve_doctor(doctor_user_id: Optional[str]):
 
 
 @api.get("/doctors")
-async def list_doctors(user=Depends(get_current_user)):
+async def list_doctors(specialty: Optional[str] = None, city: Optional[str] = None,
+                       user=Depends(get_current_user)):
+    query = {"role": "doctor", "email": {"$ne": ADMIN_EMAIL}}
+    if specialty:
+        query["specialty"] = {"$regex": re.escape(specialty), "$options": "i"}
+    if city:
+        query["city"] = {"$regex": re.escape(city), "$options": "i"}
     doctors = await db.users.find(
-        {"role": "doctor", "email": {"$ne": ADMIN_EMAIL}},
-        {"_id": 0, "user_id": 1, "name": 1, "email": 1, "specialty": 1, "clinic": 1, "city": 1, "bio": 1},
+        query,
+        {"_id": 0, "user_id": 1, "name": 1, "email": 1, "specialty": 1, "clinic": 1, "city": 1, "bio": 1,
+         "clinic_phone": 1},
     ).to_list(200)
     return doctors
 
@@ -994,6 +1002,7 @@ class ClinicianProfile(BaseModel):
     clinic: str = ""
     city: str = ""
     bio: str = ""
+    clinic_phone: str = ""
 
 
 @api.put("/profile/clinician")
@@ -1110,12 +1119,20 @@ INTAKE_AGENT = IntakeAgent()
 
 
 async def assert_doctor_can_access_patient(db, doctor, patient_user_id: str):
-    """Single gate for every doctor-facing clinical route: consent + assignment (admins see all)."""
-    query = {"user_id": patient_user_id, "sharing_enabled": True}
-    if not doctor.get("is_admin"):
-        query["assigned_doctor_user_id"] = doctor["user_id"]
-    patient = await db.users.find_one(query, USER_PROJECTION)
+    """Single gate for every doctor-facing clinical route: consent + assignment (admins see all).
+
+    A patient who books a visit with a doctor other than their own grants that doctor time-boxed access
+    to their record — that booking is the consent, and it expires with the grant.
+    """
+    patient = await db.users.find_one({"user_id": patient_user_id, "sharing_enabled": True}, USER_PROJECTION)
     if not patient:
+        raise HTTPException(status_code=403, detail="Patient is not sharing data or is not assigned to you")
+    if doctor.get("is_admin") or patient.get("assigned_doctor_user_id") == doctor["user_id"]:
+        return patient
+    grant = await db.care_grants.find_one(
+        {"patient_user_id": patient_user_id, "doctor_user_id": doctor["user_id"],
+         "revoked": False, "expires_at": {"$gt": iso()}}, {"_id": 0})
+    if not grant:
         raise HTTPException(status_code=403, detail="Patient is not sharing data or is not assigned to you")
     return patient
 
@@ -2473,7 +2490,8 @@ async def create_prescription(source: str = Form("upload"), encounter_id: Option
 @api.get("/pharmacy/prescriptions")
 async def list_prescriptions(profile_id: Optional[str] = None, user=Depends(get_current_user)):
     return await db.prescriptions.find(
-        {"profile_id": profile_key(user, profile_id), "is_deleted": {"$ne": True}}, {"_id": 0}
+        {"profile_id": profile_key(user, profile_id), "is_deleted": {"$ne": True},
+         "status": {"$ne": "draft"}}, {"_id": 0}
     ).sort("created_at", -1).to_list(50)
 
 
@@ -2607,6 +2625,558 @@ async def get_refills(profile_id: Optional[str] = None, notify: bool = False,
         refills["alerts_raised"] = await refill_engine.raise_refill_alerts(
             db, user["user_id"], profile, refills)
     return refills
+
+
+
+# ---------- Triage: how soon does this screening need a clinician? ----------
+from agents.triage import TriageAgent
+from triage import rules as triage_rules
+
+TRIAGE_AGENT = TriageAgent()
+CARE_GRANT_DAYS = 45
+
+
+async def run_report_triage(report_id: str, invoked_by: str):
+    """Never fails the caller — the screening report itself is already saved."""
+    report = await db.health_reports.find_one({"report_id": report_id}, {"_id": 0})
+    if not report:
+        return None
+    try:
+        content, run_id = await run_agent(
+            db, TRIAGE_AGENT,
+            patient_user_id=report["user_id"],
+            encounter_id=None,
+            invoked_by=invoked_by,
+            report=report,
+            profile_id=report.get("profile_id") or report["user_id"],
+        )
+    except AgentRunFailed:
+        return None
+    await db.health_reports.update_one(
+        {"report_id": report_id},
+        {"$set": {"disposition": content, "disposition_agent_run_id": run_id, "disposition_at": iso()}},
+    )
+    await db.agent_runs.update_one(
+        {"agent_run_id": run_id},
+        {"$set": {"output_ref": {"collection": "health_reports", "id": report_id}}},
+    )
+    if content["level"] in ("emergency_now", "urgent_24h"):
+        await db.alerts.insert_one({
+            "alert_id": f"alert_{uuid.uuid4().hex[:12]}",
+            "user_id": report["user_id"],
+            "profile_id": report.get("profile_id") or report["user_id"],
+            "type": "triage",
+            "severity": "critical" if content["level"] == "emergency_now" else "warning",
+            "message": content.get("headline") or triage_rules.TIMEFRAMES[content["level"]],
+            "report_id": report_id,
+            "read": False,
+            "created_at": iso(),
+        })
+        doctor_id = (await db.users.find_one({"user_id": report["user_id"]},
+                                             {"_id": 0, "assigned_doctor_user_id": 1}) or {}
+                     ).get("assigned_doctor_user_id")
+        patient_name = (await db.users.find_one({"user_id": report["user_id"]}, {"_id": 0, "name": 1}) or {}
+                        ).get("name")
+        if doctor_id:
+            await db.alerts.insert_one({
+                "alert_id": f"alert_{uuid.uuid4().hex[:12]}",
+                "user_id": doctor_id,
+                "profile_id": doctor_id,
+                "type": "triage",
+                "severity": "critical" if content["level"] == "emergency_now" else "warning",
+                "message": f"{patient_name}: screening triaged as "
+                           f"{triage_rules.TIMEFRAMES[content['level']].lower()}",
+                "patient_user_id": report["user_id"],
+                "report_id": report_id,
+                "read": False,
+                "created_at": iso(),
+            })
+    return content
+
+
+@api.post("/reports/{report_id}/triage")
+async def redo_report_triage(report_id: str, user=Depends(get_current_user)):
+    report = await db.health_reports.find_one({"report_id": report_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if not report.get("findings"):
+        await extract_report_findings(report, invoked_by=user["user_id"])
+    content = await run_report_triage(report_id, invoked_by=user["user_id"])
+    if content is None:
+        raise HTTPException(status_code=502, detail="Could not triage this screening")
+    return await db.health_reports.find_one({"report_id": report_id}, {"_id": 0})
+
+
+# ---------- Booking: doctor availability and patient self-booking ----------
+class AvailabilityBlock(BaseModel):
+    weekday: int
+    start: str
+    end: str
+
+
+class AvailabilityIn(BaseModel):
+    slot_minutes: int = 30
+    tz_offset_minutes: int = 180
+    weekly: List[AvailabilityBlock] = []
+    blocked_dates: List[str] = []
+
+
+@api.get("/doctor/availability")
+async def get_my_availability(user=Depends(require_doctor)):
+    row = await db.doctor_availability.find_one({"doctor_user_id": user["user_id"]}, {"_id": 0})
+    return row or {"doctor_user_id": user["user_id"], "slot_minutes": 30, "tz_offset_minutes": 180,
+                   "weekly": [], "blocked_dates": []}
+
+
+@api.put("/doctor/availability")
+async def set_my_availability(body: AvailabilityIn, user=Depends(require_doctor)):
+    for block in body.weekly:
+        if not 0 <= block.weekday <= 6 or block.start >= block.end:
+            raise HTTPException(status_code=400, detail="Each block needs a weekday 0-6 and start before end")
+    if body.slot_minutes not in (15, 20, 30, 45, 60):
+        raise HTTPException(status_code=400, detail="Slot length must be 15, 20, 30, 45 or 60 minutes")
+    doc = {"doctor_user_id": user["user_id"], **body.model_dump(), "updated_at": iso()}
+    await db.doctor_availability.update_one({"doctor_user_id": user["user_id"]}, {"$set": doc}, upsert=True)
+    return await db.doctor_availability.find_one({"doctor_user_id": user["user_id"]}, {"_id": 0})
+
+
+WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+async def _open_slots(doctor_user_id: str, days: int = 14):
+    availability = await db.doctor_availability.find_one({"doctor_user_id": doctor_user_id}, {"_id": 0})
+    if not availability or not availability.get("weekly"):
+        return []
+    slot_minutes = availability.get("slot_minutes") or 30
+    offset = timedelta(minutes=availability.get("tz_offset_minutes", 180))
+    blocked = set(availability.get("blocked_dates") or [])
+    taken = {e["scheduled_at"][:16] for e in await db.encounters.find(
+        {"doctor_user_id": doctor_user_id, "status": {"$in": ["scheduled", "in_progress"]}},
+        {"_id": 0, "scheduled_at": 1}).to_list(1000) if e.get("scheduled_at")}
+
+    now = now_utc()
+    slots = []
+    for offset_days in range(days):
+        local_day = (now + offset).date() + timedelta(days=offset_days)
+        date_str = local_day.isoformat()
+        if date_str in blocked:
+            continue
+        for block in availability["weekly"]:
+            if int(block["weekday"]) != local_day.weekday():
+                continue
+            cursor = datetime.fromisoformat(f"{date_str}T{block['start']}:00+00:00")
+            block_end = datetime.fromisoformat(f"{date_str}T{block['end']}:00+00:00")
+            while cursor + timedelta(minutes=slot_minutes) <= block_end:
+                start_utc = cursor - offset
+                if start_utc > now + timedelta(minutes=30) and iso(start_utc)[:16] not in taken:
+                    slots.append({
+                        "start": iso(start_utc),
+                        "end": iso(start_utc + timedelta(minutes=slot_minutes)),
+                        "date": date_str,
+                        "local_time": cursor.strftime("%H:%M"),
+                        "label": f"{WEEKDAY_NAMES[local_day.weekday()]} {local_day.strftime('%d %b')} · "
+                                 f"{cursor.strftime('%H:%M')}",
+                    })
+                cursor += timedelta(minutes=slot_minutes)
+    slots.sort(key=lambda s: s["start"])
+    return slots
+
+
+@api.get("/booking/doctors")
+async def bookable_doctors(specialty: Optional[str] = None, city: Optional[str] = None,
+                           user=Depends(get_current_user)):
+    """The patient's own doctor first, then anyone else who publishes slots."""
+    query = {"role": "doctor", "email": {"$ne": ADMIN_EMAIL}}
+    if specialty:
+        query["specialty"] = {"$regex": re.escape(specialty), "$options": "i"}
+    if city:
+        query["city"] = {"$regex": re.escape(city), "$options": "i"}
+    doctors = await db.users.find(query, {"_id": 0, "user_id": 1, "name": 1, "specialty": 1, "clinic": 1,
+                                          "city": 1, "bio": 1, "clinic_phone": 1}).to_list(200)
+    published = {a["doctor_user_id"] for a in await db.doctor_availability.find(
+        {"weekly": {"$ne": []}}, {"_id": 0, "doctor_user_id": 1}).to_list(200)}
+    mine = user.get("assigned_doctor_user_id")
+    out = []
+    for doctor in doctors:
+        publishes = doctor["user_id"] in published
+        if not publishes and doctor["user_id"] != mine:
+            continue
+        doctor["is_my_doctor"] = doctor["user_id"] == mine
+        doctor["publishes_slots"] = publishes
+        doctor["next_slots"] = (await _open_slots(doctor["user_id"], days=14))[:3] if publishes else []
+        out.append(doctor)
+    out.sort(key=lambda d: (not d["is_my_doctor"], not d["publishes_slots"], d["name"] or ""))
+    return out
+
+
+@api.get("/booking/slots")
+async def open_slots(doctor_user_id: str, days: int = Query(14, le=60),
+                     user=Depends(get_current_user)):
+    doctor = await db.users.find_one({"user_id": doctor_user_id, "role": "doctor"}, USER_PROJECTION)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    return {"doctor_user_id": doctor_user_id, "doctor_name": doctor.get("name"),
+            "clinic_phone": doctor.get("clinic_phone"), "slots": await _open_slots(doctor_user_id, days)}
+
+
+class BookingIn(BaseModel):
+    doctor_user_id: str
+    slot_start: str
+    reason_for_visit: str = ""
+    report_id: Optional[str] = None
+    profile_id: Optional[str] = None
+
+
+@api.post("/booking")
+async def book_visit(body: BookingIn, user=Depends(get_current_user)):
+    if user.get("role") == "doctor":
+        raise HTTPException(status_code=403, detail="Clinicians create visits from their schedule")
+    doctor = await db.users.find_one({"user_id": body.doctor_user_id, "role": "doctor"}, USER_PROJECTION)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    slots = await _open_slots(body.doctor_user_id, days=60)
+    slot = next((s for s in slots if s["start"] == body.slot_start), None)
+    if not slot:
+        raise HTTPException(status_code=409, detail="That time is no longer available. Pick another slot.")
+
+    triage_level = None
+    report = None
+    if body.report_id:
+        report = await db.health_reports.find_one(
+            {"report_id": body.report_id, "user_id": user["user_id"]}, {"_id": 0})
+        if report:
+            triage_level = (report.get("disposition") or {}).get("level")
+    if triage_level == "emergency_now":
+        raise HTTPException(status_code=409, detail=(
+            f"This screening was triaged as needing emergency care now — an appointment is not safe. "
+            f"Call {triage_rules.EMERGENCY_NUMBER} or go to the nearest emergency department."))
+
+    encounter = {
+        "encounter_id": f"enc_{uuid.uuid4().hex[:12]}",
+        "patient_user_id": user["user_id"],
+        "profile_id": profile_key(user, body.profile_id),
+        "doctor_user_id": body.doctor_user_id,
+        "scheduled_at": slot["start"],
+        "slot_label": slot["label"],
+        "started_at": None,
+        "ended_at": None,
+        "status": "scheduled",
+        "reason_for_visit": body.reason_for_visit or (report or {}).get("disposition", {})
+        .get("suggested_reason_for_visit", ""),
+        "booked_by": "patient",
+        "triage_level": triage_level,
+        "screening_report_id": body.report_id,
+        "created_at": iso(),
+        "updated_at": iso(),
+    }
+    await db.encounters.insert_one(dict(encounter))
+
+    if doctor["user_id"] != user.get("assigned_doctor_user_id"):
+        await db.care_grants.insert_one({
+            "grant_id": f"grant_{uuid.uuid4().hex[:12]}",
+            "patient_user_id": user["user_id"],
+            "doctor_user_id": doctor["user_id"],
+            "encounter_id": encounter["encounter_id"],
+            "reason": "Patient booked a visit with this clinician",
+            "revoked": False,
+            "expires_at": iso(now_utc() + timedelta(days=CARE_GRANT_DAYS)),
+            "created_at": iso(),
+        })
+    if report:
+        await db.health_reports.update_one(
+            {"report_id": body.report_id},
+            {"$set": {"shared_encounter_id": encounter["encounter_id"], "shared_at": iso()}})
+
+    urgent = triage_level in ("emergency_now", "urgent_24h")
+    await db.alerts.insert_one({
+        "alert_id": f"alert_{uuid.uuid4().hex[:12]}",
+        "user_id": doctor["user_id"],
+        "profile_id": doctor["user_id"],
+        "type": "appointment",
+        "severity": "warning" if urgent else "info",
+        "message": f"{user.get('name')} booked {slot['label']}"
+                   + (f" — screening triaged as {triage_rules.TIMEFRAMES[triage_level].lower()}"
+                      if urgent else ""),
+        "patient_user_id": user["user_id"],
+        "encounter_id": encounter["encounter_id"],
+        "read": False,
+        "created_at": iso(),
+    })
+    return {**encounter, "doctor_name": doctor.get("name"), "clinic": doctor.get("clinic"),
+            "clinic_phone": doctor.get("clinic_phone")}
+
+
+@api.post("/encounters/{encounter_id}/cancel")
+async def cancel_visit(encounter_id: str, user=Depends(get_current_user)):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Visit not found")
+    if user["user_id"] not in (enc["patient_user_id"], enc["doctor_user_id"]) and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="This visit belongs to someone else")
+    if enc["status"] not in ("scheduled", "in_progress"):
+        raise HTTPException(status_code=409, detail=f"A visit that is {enc['status']} cannot be cancelled")
+    await db.encounters.update_one({"encounter_id": encounter_id},
+                                   {"$set": {"status": "cancelled", "cancelled_by": user["user_id"],
+                                             "updated_at": iso()}})
+    other = enc["doctor_user_id"] if user["user_id"] == enc["patient_user_id"] else enc["patient_user_id"]
+    await db.alerts.insert_one({
+        "alert_id": f"alert_{uuid.uuid4().hex[:12]}",
+        "user_id": other, "profile_id": other, "type": "appointment", "severity": "info",
+        "message": f"{user.get('name')} cancelled the visit on "
+                   f"{(enc.get('slot_label') or enc['scheduled_at'][:16])}",
+        "encounter_id": encounter_id, "read": False, "created_at": iso(),
+    })
+    return await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+
+
+# ---------- Doctor-written prescriptions ----------
+class RxItemIn(BaseModel):
+    drug_name: str
+    generic_name: str = ""
+    form: str = ""
+    strength: str = ""
+    dose: str = ""
+    frequency: str = ""
+    duration_days: Optional[int] = None
+    quantity: Optional[int] = None
+    refills: int = 0
+    instructions: str = ""
+
+
+class PrescriptionIn(BaseModel):
+    items: List[RxItemIn] = []
+    diagnosis: str = ""
+    notes: str = ""
+
+
+async def _annotate_rx_items(items: List[dict]) -> List[dict]:
+    """Flags controlled medicines so they can never be routed to an online basket."""
+    catalog = await db.catalog_items.find({"active": True}, {"_id": 0}).to_list(1000)
+    out = []
+    for item in items:
+        matches = refill_engine.find_matches(item.get("drug_name") or item.get("generic_name"),
+                                            item.get("strength"), catalog, include_controlled=True)
+        controlled = any(m[1].get("is_controlled") for m in matches)
+        out.append({**item, "is_controlled": controlled, "dispense_in_clinic": controlled,
+                    "catalog_match_count": len([m for m in matches if not m[1].get("is_controlled")])})
+    return out
+
+
+async def _load_rx_for_doctor(prescription_id: str, doctor):
+    rx = await db.prescriptions.find_one({"prescription_id": prescription_id}, {"_id": 0})
+    if not rx:
+        raise HTTPException(status_code=404, detail="Prescription not found")
+    if rx.get("issued_by_doctor_user_id") != doctor["user_id"] and not doctor.get("is_admin"):
+        raise HTTPException(status_code=403, detail="This prescription was written by another clinician")
+    return rx
+
+
+@api.post("/encounters/{encounter_id}/prescription")
+async def create_prescription(encounter_id: str, body: PrescriptionIn, user=Depends(require_doctor)):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc or enc["doctor_user_id"] != user["user_id"]:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    await assert_doctor_can_access_patient(db, user, enc["patient_user_id"])
+    if not body.items:
+        raise HTTPException(status_code=400, detail="A prescription needs at least one medicine")
+    existing = await db.prescriptions.find_one(
+        {"encounter_id": encounter_id, "source": "encounter", "status": "draft"}, {"_id": 0})
+    items = await _annotate_rx_items([i.model_dump() for i in body.items])
+    if existing:
+        await db.prescriptions.update_one(
+            {"prescription_id": existing["prescription_id"]},
+            {"$set": {"items": items, "diagnosis": body.diagnosis, "notes": body.notes, "updated_at": iso()}})
+        return await db.prescriptions.find_one({"prescription_id": existing["prescription_id"]}, {"_id": 0})
+
+    rx = {
+        "prescription_id": f"rx_{uuid.uuid4().hex[:12]}",
+        "user_id": enc["patient_user_id"],
+        "profile_id": enc.get("profile_id") or enc["patient_user_id"],
+        "source": "encounter",
+        "encounter_id": encounter_id,
+        "issued_by_doctor_user_id": user["user_id"],
+        "issued_by_name": user.get("name"),
+        "issued_by_clinic": user.get("clinic"),
+        "items": items,
+        "diagnosis": body.diagnosis,
+        "notes": body.notes,
+        "status": "draft",
+        "image_path": None,
+        "issued_date": None,
+        "verification_status": "pending",
+        "verified_by_pharmacy_id": None,
+        "verified_at": None,
+        "rejection_reason": None,
+        "transmitted_to_pharmacy_id": None,
+        "transmitted_at": None,
+        "expires_at": iso(now_utc() + timedelta(days=PRESCRIPTION_VALID_DAYS)),
+        "is_deleted": False,
+        "created_at": iso(),
+        "updated_at": iso(),
+    }
+    await db.prescriptions.insert_one(dict(rx))
+    return rx
+
+
+@api.patch("/prescriptions/{prescription_id}")
+async def update_prescription(prescription_id: str, body: PrescriptionIn, user=Depends(require_doctor)):
+    rx = await _load_rx_for_doctor(prescription_id, user)
+    if rx["status"] != "draft":
+        raise HTTPException(status_code=409, detail="A signed prescription cannot be edited")
+    items = await _annotate_rx_items([i.model_dump() for i in body.items])
+    await db.prescriptions.update_one(
+        {"prescription_id": prescription_id},
+        {"$set": {"items": items, "diagnosis": body.diagnosis, "notes": body.notes, "updated_at": iso()}})
+    return await db.prescriptions.find_one({"prescription_id": prescription_id}, {"_id": 0})
+
+
+@api.post("/prescriptions/{prescription_id}/sign")
+async def sign_prescription(prescription_id: str, user=Depends(require_doctor)):
+    rx = await _load_rx_for_doctor(prescription_id, user)
+    if rx["status"] == "signed":
+        raise HTTPException(status_code=409, detail="This prescription is already signed")
+    if not rx.get("items"):
+        raise HTTPException(status_code=400, detail="A prescription needs at least one medicine")
+    await db.prescriptions.update_one(
+        {"prescription_id": prescription_id},
+        {"$set": {"status": "signed", "signed_at": iso(), "issued_date": iso(), "updated_at": iso()}})
+    await db.alerts.insert_one({
+        "alert_id": f"alert_{uuid.uuid4().hex[:12]}",
+        "user_id": rx["user_id"], "profile_id": rx["profile_id"], "type": "prescription", "severity": "info",
+        "message": f"{user.get('name')} sent you a prescription for {len(rx['items'])} medicine(s)",
+        "prescription_id": prescription_id, "read": False, "created_at": iso(),
+    })
+    return await db.prescriptions.find_one({"prescription_id": prescription_id}, {"_id": 0})
+
+
+class TransmitIn(BaseModel):
+    pharmacy_id: str
+
+
+@api.post("/prescriptions/{prescription_id}/transmit")
+async def transmit_prescription(prescription_id: str, body: TransmitIn, user=Depends(require_doctor)):
+    """Sends a signed prescription to a partner pharmacy. Their pharmacist still verifies before dispensing."""
+    rx = await _load_rx_for_doctor(prescription_id, user)
+    if rx["status"] != "signed":
+        raise HTTPException(status_code=409, detail="Sign the prescription before sending it to a pharmacy")
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": body.pharmacy_id, "active": True}, {"_id": 0})
+    if not pharmacy:
+        raise HTTPException(status_code=404, detail="Partner pharmacy not found")
+    violations = compliance.check_pharmacy(pharmacy)
+    if violations:
+        raise HTTPException(status_code=422, detail={"violations": violations})
+
+    catalog = await db.catalog_items.find(
+        {"pharmacy_id": body.pharmacy_id, "active": True}, {"_id": 0}).to_list(1000)
+    lines, unmatched = [], []
+    for item in rx["items"]:
+        if item.get("is_controlled"):
+            unmatched.append({"drug_name": item["drug_name"],
+                              "reason": "Controlled medicine — dispensed in clinic, never sent online"})
+            continue
+        matches = refill_engine.find_matches(item.get("drug_name") or item.get("generic_name"),
+                                            item.get("strength"), catalog)
+        if not matches:
+            unmatched.append({"drug_name": item["drug_name"],
+                              "reason": "This pharmacy does not list that medicine"})
+            continue
+        product = matches[0][1]
+        lines.append({"item_id": product["item_id"], "sku": product["sku"], "name_en": product["name_en"],
+                      "name_ar": product["name_ar"], "qty": 1, "price_sar": product["price_sar"]})
+
+    order = None
+    if lines and pharmacy.get("fulfilment_mode") == "in_app":
+        subtotal = round(sum(l["price_sar"] for l in lines), 2)
+        order = {
+            "order_id": f"ord_{uuid.uuid4().hex[:12]}",
+            "user_id": rx["user_id"], "profile_id": rx["profile_id"], "pharmacy_id": body.pharmacy_id,
+            "pharmacy_snapshot": _pharmacy_card(pharmacy), "fulfilment_mode": "in_app",
+            "items": lines, "prescription_id": prescription_id,
+            "status": "awaiting_pharmacist_verification",
+            "status_history": [{"status": "awaiting_pharmacist_verification", "at": iso(),
+                                "note": f"Prescription sent by {user.get('name')}. The pharmacy's licensed "
+                                        f"pharmacist verifies it before dispensing."}],
+            "subtotal_sar": subtotal, "delivery_fee_sar": 0.0, "total_sar": subtotal,
+            "delivery_address": None,
+            "pickup_branch": (pharmacy.get("branches") or [{}])[0],
+            "handoff_url": None, "note": None, "created_at": iso(), "updated_at": iso(),
+        }
+        await db.orders.insert_one(dict(order))
+
+    await db.prescriptions.update_one(
+        {"prescription_id": prescription_id},
+        {"$set": {"transmitted_to_pharmacy_id": body.pharmacy_id, "transmitted_at": iso(),
+                  "transmitted_pharmacy_name": pharmacy["name_en"],
+                  "transmission_unmatched": unmatched, "updated_at": iso()}})
+    await db.alerts.insert_one({
+        "alert_id": f"alert_{uuid.uuid4().hex[:12]}",
+        "user_id": rx["user_id"], "profile_id": rx["profile_id"], "type": "prescription", "severity": "info",
+        "message": f"Your prescription was sent to {pharmacy['name_en']}",
+        "prescription_id": prescription_id, "read": False, "created_at": iso(),
+    })
+    return {"prescription": await db.prescriptions.find_one({"prescription_id": prescription_id}, {"_id": 0}),
+            "order": order, "unmatched": unmatched,
+            "pharmacy": _pharmacy_card(pharmacy)}
+
+
+@api.get("/prescriptions")
+async def list_my_prescriptions(profile_id: Optional[str] = None, encounter_id: Optional[str] = None,
+                                user=Depends(get_current_user)):
+    if user.get("role") == "doctor" and encounter_id:
+        enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+        if not enc or enc["doctor_user_id"] != user["user_id"]:
+            raise HTTPException(status_code=404, detail="Encounter not found")
+        return await db.prescriptions.find({"encounter_id": encounter_id}, {"_id": 0}
+                                           ).sort("created_at", -1).to_list(20)
+    return await db.prescriptions.find(
+        {"profile_id": profile_key(user, profile_id), "source": "encounter", "status": "signed"}, {"_id": 0}
+    ).sort("signed_at", -1).to_list(50)
+
+
+@api.get("/prescriptions/{prescription_id}")
+async def get_prescription(prescription_id: str, user=Depends(get_current_user)):
+    rx = await db.prescriptions.find_one({"prescription_id": prescription_id}, {"_id": 0})
+    if not rx:
+        raise HTTPException(status_code=404, detail="Prescription not found")
+    is_owner = rx["user_id"] == user["user_id"]
+    is_author = rx.get("issued_by_doctor_user_id") == user["user_id"]
+    if not (is_owner or is_author or user.get("is_admin")):
+        raise HTTPException(status_code=403, detail="This prescription belongs to another patient")
+    if is_owner and rx["status"] == "draft":
+        raise HTTPException(status_code=404, detail="Prescription not found")
+    return rx
+
+
+@api.get("/prescriptions/{prescription_id}/basket-options")
+async def prescription_basket_options(prescription_id: str, user=Depends(get_current_user)):
+    """What each prescribed medicine maps to in the catalog. The patient confirms every match."""
+    rx = await db.prescriptions.find_one(
+        {"prescription_id": prescription_id, "user_id": user["user_id"], "status": "signed"}, {"_id": 0})
+    if not rx:
+        raise HTTPException(status_code=404, detail="Prescription not found")
+    catalog = await db.catalog_items.find({"active": True}, {"_id": 0}).to_list(1000)
+    pharmacies = {p["pharmacy_id"]: p for p in await db.pharmacies.find({"active": True}, {"_id": 0}
+                                                                       ).to_list(100)}
+    proposals = []
+    for item in rx["items"]:
+        if item.get("is_controlled"):
+            proposals.append({"drug_name": item["drug_name"], "strength": item.get("strength"),
+                              "orderable": False, "offers": [],
+                              "reason": "Controlled medicine — collect it at the clinic with the paper "
+                                        "prescription. It can never be ordered online."})
+            continue
+        matches = [m[1] for m in refill_engine.find_matches(
+            item.get("drug_name") or item.get("generic_name"), item.get("strength"), catalog)
+            if m[0] >= 0.85 and m[1]["pharmacy_id"] in pharmacies]
+        offers = [{"item": product, "pharmacy": _pharmacy_card(pharmacies[product["pharmacy_id"]]),
+                   "sponsored": _is_sponsored(pharmacies[product["pharmacy_id"]])} for product in matches]
+        offers.sort(key=lambda o: (_rank_key(pharmacies[o["item"]["pharmacy_id"]]), o["item"]["price_sar"]))
+        proposals.append({"drug_name": item["drug_name"], "strength": item.get("strength"),
+                          "orderable": bool(offers), "offers": offers,
+                          "requires_user_confirmation": True,
+                          "reason": None if offers else
+                          "No partner pharmacy lists this medicine — search the pharmacy page instead."})
+    return {"prescription_id": prescription_id, "proposals": proposals}
 
 
 

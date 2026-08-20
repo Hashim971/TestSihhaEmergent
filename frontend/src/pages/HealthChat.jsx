@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { jsPDF } from "jspdf";
 import { Send, FileText, Plus, MessageSquare } from "lucide-react";
 import { ShareScreeningCard } from "../components/ShareScreeningCard";
+import { TriageCard } from "../components/TriageCard";
 
 export default function HealthChat() {
   const { activeProfile } = useAuth();
@@ -22,6 +23,16 @@ export default function HealthChat() {
     api.get("/reports").then(({ data }) => setLastReport(data[0] || null)).catch(() => {});
   }, []);
   const endRef = useRef(null);
+
+  const runTriage = async () => {
+    if (!lastReport) return;
+    try {
+      const { data } = await api.post(`/reports/${lastReport.report_id}/triage`);
+      setLastReport(data);
+    } catch {
+      toast.error("Could not check the urgency of this screening");
+    }
+  };
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
@@ -147,8 +158,10 @@ export default function HealthChat() {
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 fade-up" data-testid="health-chat-page">
-      <div className="lg:col-span-1 space-y-3">
+    <div className="space-y-6 fade-up">
+      {lastReport && <TriageCard report={lastReport} onRetriage={runTriage} />}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6" data-testid="health-chat-page">
+        <div className="lg:col-span-1 space-y-3">
         <button onClick={newSession} data-testid="new-screening-btn" className="btn-primary w-full justify-center">
           <Plus className="h-4 w-4" /> New Screening
         </button>
@@ -222,6 +235,7 @@ export default function HealthChat() {
             <Send className="h-4 w-4" />
           </button>
         </div>
+      </div>
       </div>
     </div>
   );

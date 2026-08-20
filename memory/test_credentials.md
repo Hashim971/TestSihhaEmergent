@@ -17,6 +17,9 @@ All accounts use standard email/password JWT auth (httpOnly cookies).
   `/admin/assignments`, which calls `PUT /api/admin/users/{user_id}/role`.
 
 ## Notes
+- Booking/triage (Phase 7): Dr. Layla publishes clinic hours in Settings (Riyadh time). Omar has two seeded
+  screening reports — a chest-pain one triaged `emergency_now` (booking deliberately blocked, shows call 997) and a
+  mild rash one triaged `self_care`. Reseed them with `python seed_triage_demo.py` if they are ever deleted.
 - Pharmacy marketplace (Phase 6): seed with `cd /app/backend && set -a && . ./.env && set +a && python seed_pharmacy.py`.
   omar.patient then has Concor 4 days from runout. Partners: Nahdi (handoff + sponsored) and Al Dawaa (in_app).
   Prescription images go to Emergent Object Storage; there is no delivery and no payment anywhere.

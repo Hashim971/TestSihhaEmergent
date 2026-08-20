@@ -11,6 +11,7 @@ import { FollowUpPanel } from "../components/FollowUpPanel";
 import { IntakeCard } from "../components/IntakeCard";
 import { ScreeningCard } from "../components/ScreeningCard";
 import { ScribePanel } from "../components/ScribePanel";
+import { PrescriptionWriter } from "../components/PrescriptionWriter";
 
 const EMPTY = {
   headline: "", chief_concerns: [], vitals_summary: [], medication_review: [],
@@ -185,6 +186,8 @@ export default function EncounterDetail() {
         restructuring={restructuring} onAsk={(q) => (artifact ? ask(q) : toast.info("Generate the briefing first"))} />
 
       <ScribePanel encounterId={id} />
+
+      <PrescriptionWriter encounterId={id} />
 
       {!artifact && !generating && (
         <div className="card p-10 text-center" data-testid="briefing-empty-state">
