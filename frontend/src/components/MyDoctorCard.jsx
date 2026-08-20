@@ -48,9 +48,27 @@ export function MyDoctorCard() {
       >
         <option value="">No doctor chosen</option>
         {doctors.map((d) => (
-          <option key={d.user_id} value={d.user_id}>{d.name} — {d.email}</option>
+          <option key={d.user_id} value={d.user_id}>
+            {d.name}
+            {d.specialty ? ` — ${d.specialty}` : ""}
+            {d.clinic ? ` · ${d.clinic}` : ""}
+            {d.city ? `, ${d.city}` : ""}
+          </option>
         ))}
       </select>
+      {(() => {
+        const chosen = doctors.find((d) => d.user_id === selected);
+        if (!chosen) return null;
+        return (
+          <div className="mt-3 border-l-2 border-sage pl-3" data-testid="chosen-doctor-details">
+            <p className="text-sm font-medium">{chosen.name}</p>
+            <p className="text-xs text-ink-soft">
+              {[chosen.specialty, chosen.clinic, chosen.city].filter(Boolean).join(" · ") || "No profile details yet"}
+            </p>
+            {chosen.bio && <p className="text-xs text-ink mt-1">{chosen.bio}</p>}
+          </div>
+        );
+      })()}
       {loadError && (
         <button onClick={loadDoctors} data-testid="retry-doctors-btn" className="btn-outline mt-3">
           Could not load doctors — try again

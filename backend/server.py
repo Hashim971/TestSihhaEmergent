@@ -963,8 +963,24 @@ async def _resolve_doctor(doctor_user_id: Optional[str]):
 
 @api.get("/doctors")
 async def list_doctors(user=Depends(get_current_user)):
-    doctors = await db.users.find({"role": "doctor"}, {"_id": 0, "user_id": 1, "name": 1, "email": 1}).to_list(200)
+    doctors = await db.users.find(
+        {"role": "doctor", "email": {"$ne": ADMIN_EMAIL}},
+        {"_id": 0, "user_id": 1, "name": 1, "email": 1, "specialty": 1, "clinic": 1, "city": 1, "bio": 1},
+    ).to_list(200)
     return doctors
+
+
+class ClinicianProfile(BaseModel):
+    specialty: str = ""
+    clinic: str = ""
+    city: str = ""
+    bio: str = ""
+
+
+@api.put("/profile/clinician")
+async def update_clinician_profile(body: ClinicianProfile, user=Depends(require_doctor)):
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": body.model_dump()})
+    return with_capabilities(await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION))
 
 
 @api.put("/profile/doctor")
@@ -1680,9 +1696,24 @@ async def doctor_dashboard(user=Depends(require_doctor)):
 
     alerts = await db.alerts.find(
         {"user_id": {"$in": patient_ids + [user["user_id"]]}, "read": False}, {"_id": 0}
-    ).sort("created_at", -1).to_list(20)
+    ).sort("created_at", -1).to_list(200)
     for a in alerts:
-        a["patient_name"] = names.get(a.get("user_id"))
+        # Alerts raised FOR the doctor (e.g. intake completed) name the patient via profile_id.
+        a["patient_name"] = names.get(a.get("user_id")) or names.get(a.get("profile_id"))
+
+    grouped = {}
+    for a in alerts:
+        key = (a.get("type") or "other", a.get("severity") or "info")
+        g = grouped.setdefault(key, {"type": key[0], "severity": key[1], "count": 0,
+                                     "latest_at": a["created_at"], "patients": [], "items": []})
+        g["count"] += 1
+        g["latest_at"] = max(g["latest_at"], a["created_at"])
+        if a.get("patient_name") and a["patient_name"] not in g["patients"]:
+            g["patients"].append(a["patient_name"])
+        if len(g["items"]) < 5:
+            g["items"].append({"alert_id": a["alert_id"], "message": a.get("message"),
+                               "patient_name": a.get("patient_name"), "created_at": a["created_at"]})
+    alert_groups = sorted(grouped.values(), key=lambda g: (g["severity"] != "critical", -g["count"]))
     runs = await db.agent_runs.find(
         {"invoked_by_user_id": user["user_id"]},
         {"_id": 0, "agent_run_id": 1, "agent_type": 1, "status": 1, "latency_ms": 1,
@@ -1707,6 +1738,7 @@ async def doctor_dashboard(user=Depends(require_doctor)):
         "awaiting_signature": awaiting_signature[:5],
         "awaiting_intake": awaiting_intake[:5],
         "alerts": alerts[:6],
+        "alert_groups": alert_groups,
         "recent_runs": runs,
     }
 

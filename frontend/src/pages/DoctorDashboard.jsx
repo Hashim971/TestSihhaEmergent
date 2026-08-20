@@ -5,6 +5,8 @@ import { useAuth } from "../context/AuthContext";
 import {
   Users, CalendarClock, Sparkles, ShieldCheck, ClipboardList, Bell, ArrowRight, Activity,
 } from "lucide-react";
+import { DayView } from "../components/DayView";
+import { AlertGroups } from "../components/AlertGroups";
 
 const Stat = ({ icon: Icon, label, value, tone, testid }) => (
   <div className="card p-5" data-testid={testid}>
@@ -108,9 +110,11 @@ export default function DoctorDashboard() {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2 space-y-6">
-          <Panel title="Today" icon={CalendarClock} items={data.todays_visits} onOpen={open}
-            testid="dash-today" empty="Nothing booked today. Your upcoming week is below."
+          <DayView visits={data.todays_visits} onOpen={open}
             action={<Link to="/doctor/schedule" data-testid="dash-schedule-link" className="btn-outline !py-1.5 !px-3 text-xs">Full schedule</Link>} />
+
+          <Panel title="Later this week" icon={CalendarClock} items={data.upcoming_visits} onOpen={open}
+            testid="dash-today" empty="Nothing else booked this week." />
 
           <Panel title="Needs a briefing" icon={Sparkles} items={data.needs_briefing} onOpen={open}
             testid="dash-needs-briefing" empty="Every visit this week has a briefing." />
@@ -123,27 +127,7 @@ export default function DoctorDashboard() {
         </div>
 
         <div className="space-y-6">
-          <div className="card p-6" data-testid="dash-alerts">
-            <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
-              <Bell className="h-4 w-4 text-forest" /> Unread alerts
-            </h2>
-            {data.alerts.length === 0 && <p className="text-sm text-ink-soft">Nothing new.</p>}
-            <div className="space-y-2">
-              {data.alerts.map((a) => (
-                <div key={a.alert_id} data-testid={`dash-alert-${a.alert_id}`}
-                  className={`border rounded-xl px-3 py-2 ${
-                    a.severity === "critical" ? "border-terracotta/40 bg-terracotta/5"
-                      : a.severity === "info" ? "border-sage/50 bg-sage/10" : "border-line"}`}>
-                  <span className={`text-[10px] uppercase tracking-wider font-bold ${
-                    a.severity === "info" ? "text-forest" : "text-terracotta"}`}>
-                    {a.type} · {a.severity}
-                  </span>
-                  <p className="text-sm mt-0.5">{a.message}</p>
-                  {a.patient_name && <p className="text-xs text-ink-soft">{a.patient_name}</p>}
-                </div>
-              ))}
-            </div>
-          </div>
+          <AlertGroups groups={data.alert_groups || []} />
 
           <div className="card p-6" data-testid="dash-recent-runs">
             <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">

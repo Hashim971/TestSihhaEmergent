@@ -4,6 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import YesNo from "../components/YesNo";
 import { MyDoctorCard } from "../components/MyDoctorCard";
+import { ClinicianProfileCard } from "../components/ClinicianProfileCard";
 import { Save, User, HeartPulse, Pill, Leaf } from "lucide-react";
 
 const EMPTY = {
@@ -78,7 +79,10 @@ export default function Settings() {
       </div>
 
       {user.role === "patient" && <MyDoctorCard />}
+      {user.role === "doctor" && <ClinicianProfileCard />}
 
+      {user.role === "doctor" ? null : (
+      <>
       <Section icon={User} title="General Information">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
@@ -199,6 +203,8 @@ export default function Settings() {
           <Save className="h-4 w-4" /> {saving ? "Saving…" : "Save Changes"}
         </button>
       </div>
+      </>
+      )}
     </div>
   );
 }

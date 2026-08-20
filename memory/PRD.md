@@ -179,6 +179,22 @@ normal patient flagged `clinician_requested`, and only the admin can promote via
 Tests: `/app/backend/tests/test_doctor_workspace.py` — 12 pass; frontend testing agent 8/8
 (`/app/test_reports/iteration_7.json`).
 
+## Dashboard polish: alert grouping, clinician profiles, day view (June 2026)
+- **Alert grouping**: `GET /api/doctor/dashboard` now returns `alert_groups`, one per (type, severity), with a count,
+  the patients involved (resolved via `profile_id` for alerts raised *for* the doctor, e.g. intake completions),
+  the latest timestamp and up to 5 sample items. `components/AlertGroups.jsx` renders "189 medication alerts" /
+  "10 pre-visit intakes completed" with expandable detail; critical is terracotta, warning lightly tinted, info sage.
+- **Clinician profile**: `PUT /api/profile/clinician` (specialty, clinic, city, bio) and `GET /api/doctors` now
+  returns those public fields, excluding the admin ops account. `components/ClinicianProfileCard.jsx` appears in
+  Settings for doctors (patient health sections are hidden for them), and `MyDoctorCard` shows
+  "Name — Specialty · Clinic, City" plus a details block with the bio for the chosen doctor.
+- **Day view**: `components/DayView.jsx` replaces the flat "Today" list — hour rows from an hour before the first
+  visit to an hour after the last, current hour highlighted, each visit showing time, patient, reason, intake hint
+  and briefing badge ("Signed" / "Draft" / "No briefing"). The old flat list became "Later this week".
+Tests: `test_doctor_workspace.py` grew to 18 passing (group integrity, patient naming, profile visibility,
+directory field whitelist); frontend testing agent iteration_8 — all core criteria passed, and its three
+follow-ups (intake group names, warning tint, admin in directory) are fixed and re-verified.
+
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)
 - P2: Voice input, body-map symptom input, notification email/SMS, counterfeit pill detection, real wearable integrations

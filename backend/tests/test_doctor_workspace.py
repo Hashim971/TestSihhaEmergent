@@ -87,6 +87,65 @@ class TestDoctorDashboard:
         assert all_of_them >= mine
 
 
+class TestClinicianProfile:
+    def test_doctor_sets_profile_and_patients_see_it(self, doctor, patient):
+        ds, doc = doctor
+        ps, _ = patient
+        profile = {"specialty": "Internal Medicine", "clinic": "Al Noor Medical Centre",
+                   "city": "Riyadh", "bio": "Chronic disease management and hypertension follow-up."}
+        r = ds.put(f"{API}/profile/clinician", json=profile, timeout=60)
+        assert r.status_code == 200, r.text
+        for key, value in profile.items():
+            assert r.json()[key] == value
+        assert "password_hash" not in r.text
+
+        directory = ps.get(f"{API}/doctors", timeout=60).json()
+        row = next(d for d in directory if d["user_id"] == doc["user_id"])
+        assert row["specialty"] == "Internal Medicine" and row["clinic"] == "Al Noor Medical Centre"
+
+    def test_patients_cannot_set_a_clinician_profile(self, patient):
+        ps, _ = patient
+        assert ps.put(f"{API}/profile/clinician", json={"specialty": "Cardiology"}, timeout=60).status_code == 403
+
+    def test_directory_exposes_only_public_fields(self, patient):
+        ps, _ = patient
+        allowed = {"user_id", "name", "email", "specialty", "clinic", "city", "bio"}
+        listing = ps.get(f"{API}/doctors", timeout=60).json()
+        for d in listing:
+            assert set(d).issubset(allowed), set(d) - allowed
+        assert all(d["email"] != ADMIN["email"] for d in listing), "the admin ops account is not a treating clinician"
+
+
+class TestAlertGrouping:
+    def test_groups_roll_up_repeated_alerts(self, doctor):
+        ds, _ = doctor
+        body = ds.get(f"{API}/doctor/dashboard", timeout=60).json()
+        groups = body["alert_groups"]
+        assert isinstance(groups, list)
+        assert sum(g["count"] for g in groups) == body["stats"]["unread_alerts"]
+        for g in groups:
+            assert g["type"] and g["severity"]
+            assert g["count"] >= 1 and len(g["items"]) <= 5
+            assert len(g["items"]) <= g["count"]
+            assert g["latest_at"]
+            assert len(g["patients"]) == len(set(g["patients"]))
+        keys = [(g["type"], g["severity"]) for g in groups]
+        assert len(keys) == len(set(keys)), "one group per type+severity"
+
+    def test_groups_name_the_patients_involved(self, doctor):
+        ds, _ = doctor
+        groups = ds.get(f"{API}/doctor/dashboard", timeout=60).json()["alert_groups"]
+        intake = next((g for g in groups if g["type"] == "intake"), None)
+        if intake:
+            assert intake["patients"], "intake alerts are raised for the doctor but must still name the patient"
+
+    def test_critical_groups_come_first(self, doctor):
+        ds, _ = doctor
+        groups = ds.get(f"{API}/doctor/dashboard", timeout=60).json()["alert_groups"]
+        severities = [g["severity"] for g in groups]
+        if "critical" in severities:
+            assert severities.index("critical") == 0
+
 class TestClinicianAccessRequest:
     @pytest.fixture
     def applicant(self, db):
