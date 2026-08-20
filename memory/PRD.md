@@ -34,7 +34,7 @@ Strict ADDITIVE-ONLY contract: no refactors, no renames, no new npm/pip packages
 - Phase 0 — Security fixes: DONE (June 2026)
 - Phase 1 — Agent runtime + Pre-Visit Briefing Agent + interactive follow-up: DONE (June 2026)
 - Phase 2 — Intake Agent (intake_forms, Intake.jsx wizard): DONE (June 2026)
-- Phase 3 — Clinical Scribe, Arabic-first (Transcriber protocol + stub provider, SOAP notes, consent gate): PENDING
+- Phase 3 — Clinical Scribe, Arabic-first: DONE (June 2026)
 - Phase 4 — Coding Agent, NPHIES/ICD-10-AM FHIR R4 (signed notes only): PENDING
 - Phase 5 — Triage Agent (deterministic red-flag rules before LLM, feature-flagged off): PENDING
 - Phase 6 — Pharmacy Marketplace (independent track; compliance.py, refill.py, handoff + in_app fulfilment): PENDING
@@ -194,6 +194,31 @@ Tests: `/app/backend/tests/test_doctor_workspace.py` — 12 pass; frontend testi
 Tests: `test_doctor_workspace.py` grew to 18 passing (group integrity, patient naming, profile visibility,
 directory field whitelist); frontend testing agent iteration_8 — all core criteria passed, and its three
 follow-ups (intake group names, warning tint, admin in directory) are fixed and re-verified.
+
+## Phase 3 — Clinical Scribe, Arabic-first (completed June 2026)
+Transcription is abstracted behind `agents/transcription/base.py` (`Transcriber` protocol) with two
+implementations — `stub.py` (reads `fixtures/consultation_ar_sa.json`, a Saudi-dialect consultation with
+code-switched English drug names, a stated BP of 150/95 and two inaudible passages) and `hosted.py` (hosted
+speech-to-text via the Emergent key, segment timestamps, confidence from avg_logprob). Selection is
+`TRANSCRIPTION_PROVIDER` (default `stub`); no vendor name appears in `scribe.py` or any route, and a test
+asserts that.
+`consultation_audio` collection: multipart chunked upload (`POST /api/encounters/{id}/audio/init`,
+`/api/audio/{id}/chunk`, `/api/audio/{id}/complete`), Fernet-encrypted at rest under `AUDIO_STORAGE_DIR` with
+0600 perms, `retention_expires_at` from `AUDIO_RETENTION_DAYS` (30). `purge_expired_audio()` hard-deletes the
+bytes and keeps the metadata row with `deleted_at` set; exposed as `POST /api/admin/audio/purge`, scheduled
+daily in `.emergent/crons.yml`, and runnable via `backend/scripts/audio_retention.py`.
+Consent: `POST /api/encounters/{id}/consent` writes `recording_consent` on the encounter; every audio route
+goes through `_consented_encounter()` and returns 403 without it. The UI gate (`components/ScribePanel.jsx`)
+keeps the record button disabled until the checkbox is ticked and consent is posted.
+`agents/scribe.py` + `prompts/scribe_v1.md` produce a `soap_note` clinical_artifact through the Phase 1 runner
+and draft → sign flow. Objective vitals come from `get_vitals_summary` (`source: "recorded"`); transcript-stated
+vitals are added separately with `conflict` populated on both entries. Segments below
+`TRANSCRIPTION_CONFIDENCE_THRESHOLD` land in `low_confidence_segments`, and signing is blocked with 409 until
+each is acknowledged via `POST /api/artifacts/{id}/acknowledge` (the UI disables Sign until then).
+`GET /api/encounters/{id}/soap` returns consent, audio state and the latest note.
+Tests: `/app/backend/tests/test_phase3_scribe.py` — 16 pass, covering all seven acceptance criteria.
+Verified in the browser: recorded-vs-stated BP conflict, Arabic low-confidence passages, Sign disabled until
+acknowledged, drug name "Concor" preserved rather than corrected.
 
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)

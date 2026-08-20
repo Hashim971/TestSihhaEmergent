@@ -11,11 +11,12 @@ from pathlib import Path
 import bcrypt
 import jwt
 from dotenv import load_dotenv
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
+from cryptography.fernet import Fernet
 from typing import Optional, List, Any
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
@@ -27,6 +28,8 @@ from agents.previsit import PreVisitBriefingAgent
 from agents.briefing_qa import BriefingQAAgent
 from agents.intake import IntakeAgent
 from agents.screening import ScreeningExtractionAgent
+from agents.scribe import ScribeAgent
+from agents.transcription import get_transcriber
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -270,6 +273,8 @@ async def seed_and_index():
     await db.briefing_threads.create_index("artifact_id", unique=True)
     await db.intake_forms.create_index("encounter_id", unique=True)
     await db.intake_forms.create_index([("patient_user_id", 1), ("status", 1)])
+    await db.consultation_audio.create_index("encounter_id")
+    await db.consultation_audio.create_index([("deleted_at", 1), ("retention_expires_at", 1)])
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@sihha.ai").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@123")
     existing = await db.users.find_one({"email": admin_email})
@@ -1310,6 +1315,15 @@ async def sign_artifact(artifact_id: str, user=Depends(require_doctor)):
     artifact = await _load_artifact_for_doctor(artifact_id, user)
     if artifact["status"] == "signed":
         raise HTTPException(status_code=409, detail="Artifact is already signed")
+    if artifact["artifact_type"] == "soap_note":
+        content = artifact.get("edited_content") or artifact["content"]
+        pending = [i for i in range(len(content.get("low_confidence_segments") or []))
+                   if i not in (artifact.get("acknowledged_segments") or [])]
+        if pending:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{len(pending)} low-confidence segment(s) still need acknowledgement before signing",
+            )
     await db.clinical_artifacts.update_one(
         {"artifact_id": artifact_id},
         {"$set": {"status": "signed", "signed_by": user["user_id"], "signed_at": iso(), "updated_at": iso()}},
@@ -1741,6 +1755,215 @@ async def doctor_dashboard(user=Depends(require_doctor)):
         "alert_groups": alert_groups,
         "recent_runs": runs,
     }
+
+
+# ---------- Clinical Scribe: consent, audio, SOAP notes ----------
+SCRIBE_AGENT = ScribeAgent()
+AUDIO_DIR = Path(os.environ.get("AUDIO_STORAGE_DIR", "/app/backend/uploads/audio"))
+AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+AUDIO_RETENTION_DAYS = int(os.environ.get("AUDIO_RETENTION_DAYS", "30"))
+_fernet = Fernet(os.environ["AUDIO_ENCRYPTION_KEY"].encode())
+
+
+class ConsentIn(BaseModel):
+    granted: bool
+
+
+@api.post("/encounters/{encounter_id}/consent")
+async def record_recording_consent(encounter_id: str, body: ConsentIn, user=Depends(get_current_user)):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    if user["user_id"] not in (enc["patient_user_id"], enc["doctor_user_id"]):
+        raise HTTPException(status_code=403, detail="Not a participant in this encounter")
+    consent = {"granted": body.granted, "granted_at": iso(), "granted_by": user["user_id"]}
+    await db.encounters.update_one({"encounter_id": encounter_id},
+                                   {"$set": {"recording_consent": consent, "updated_at": iso()}})
+    return consent
+
+
+async def _consented_encounter(encounter_id: str, doctor):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    await assert_doctor_can_access_patient(db, doctor, enc["patient_user_id"])
+    if not (enc.get("recording_consent") or {}).get("granted"):
+        raise HTTPException(status_code=403, detail="Recording consent has not been given for this encounter")
+    return enc
+
+
+@api.post("/encounters/{encounter_id}/audio/init")
+async def init_audio_upload(encounter_id: str, mime_type: str = "audio/webm", user=Depends(require_doctor)):
+    enc = await _consented_encounter(encounter_id, user)
+    consent = enc["recording_consent"]
+    audio = {
+        "audio_id": f"aud_{uuid.uuid4().hex[:12]}",
+        "encounter_id": encounter_id,
+        "patient_user_id": enc["patient_user_id"],
+        "storage_path": None,
+        "duration_seconds": 0.0,
+        "mime_type": mime_type,
+        "size_bytes": 0,
+        "consent_recorded_at": consent["granted_at"],
+        "consent_by_user_id": consent["granted_by"],
+        "transcription_status": "pending",
+        "transcript": None,
+        "retention_expires_at": iso(now_utc() + timedelta(days=AUDIO_RETENTION_DAYS)),
+        "deleted_at": None,
+        "created_at": iso(),
+    }
+    await db.consultation_audio.insert_one(dict(audio))
+    return audio
+
+
+@api.post("/audio/{audio_id}/chunk")
+async def upload_audio_chunk(audio_id: str, index: int = Form(...), chunk: UploadFile = File(...),
+                             user=Depends(require_doctor)):
+    audio = await db.consultation_audio.find_one({"audio_id": audio_id}, {"_id": 0})
+    if not audio:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    await _consented_encounter(audio["encounter_id"], user)
+    part = AUDIO_DIR / f"{audio_id}.part"
+    data = await chunk.read()
+    with open(part, "ab") as fh:
+        fh.write(data)
+    os.chmod(part, 0o600)
+    await db.consultation_audio.update_one({"audio_id": audio_id},
+                                           {"$inc": {"size_bytes": len(data)}})
+    return {"audio_id": audio_id, "index": index, "received_bytes": len(data)}
+
+
+@api.post("/audio/{audio_id}/complete")
+async def complete_audio_upload(audio_id: str, duration_seconds: float = Form(0.0), user=Depends(require_doctor)):
+    audio = await db.consultation_audio.find_one({"audio_id": audio_id}, {"_id": 0})
+    if not audio:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    enc = await _consented_encounter(audio["encounter_id"], user)
+    part = AUDIO_DIR / f"{audio_id}.part"
+    if not part.exists():
+        raise HTTPException(status_code=400, detail="No audio was uploaded")
+
+    encrypted = AUDIO_DIR / f"{audio_id}.enc"
+    encrypted.write_bytes(_fernet.encrypt(part.read_bytes()))
+    os.chmod(encrypted, 0o600)
+    part.unlink()
+    await db.consultation_audio.update_one(
+        {"audio_id": audio_id},
+        {"$set": {"storage_path": str(encrypted), "duration_seconds": duration_seconds,
+                  "transcription_status": "processing"}},
+    )
+
+    plain = AUDIO_DIR / f"{audio_id}.plain"
+    try:
+        plain.write_bytes(_fernet.decrypt(encrypted.read_bytes()))
+        transcript = await get_transcriber().transcribe(str(plain), language_hint="ar-SA")
+    except Exception as exc:
+        await db.consultation_audio.update_one({"audio_id": audio_id},
+                                               {"$set": {"transcription_status": "failed"}})
+        raise HTTPException(status_code=502, detail=f"Transcription failed: {type(exc).__name__}")
+    finally:
+        plain.unlink(missing_ok=True)
+
+    await db.consultation_audio.update_one(
+        {"audio_id": audio_id},
+        {"$set": {"transcript": transcript, "transcription_status": "complete"}},
+    )
+
+    try:
+        content, run_id = await run_agent(
+            db, SCRIBE_AGENT,
+            patient_user_id=enc["patient_user_id"],
+            encounter_id=enc["encounter_id"],
+            invoked_by=user["user_id"],
+            profile_id=enc["profile_id"],
+            transcript=transcript,
+            audio_id=audio_id,
+        )
+    except AgentRunFailed as exc:
+        raise _agent_http_error(exc)
+
+    artifact = {
+        "artifact_id": f"art_{uuid.uuid4().hex[:12]}",
+        "artifact_type": "soap_note",
+        "encounter_id": enc["encounter_id"],
+        "patient_user_id": enc["patient_user_id"],
+        "doctor_user_id": user["user_id"],
+        "content": content,
+        "edited_content": None,
+        "audio_id": audio_id,
+        "acknowledged_segments": [],
+        "status": "draft",
+        "signed_by": None,
+        "signed_at": None,
+        "agent_run_id": run_id,
+        "created_at": iso(),
+        "updated_at": iso(),
+    }
+    await db.clinical_artifacts.insert_one(dict(artifact))
+    await db.agent_runs.update_one(
+        {"agent_run_id": run_id},
+        {"$set": {"output_ref": {"collection": "clinical_artifacts", "id": artifact["artifact_id"]}}},
+    )
+    return artifact
+
+
+@api.get("/encounters/{encounter_id}/soap")
+async def get_soap_note(encounter_id: str, user=Depends(require_doctor)):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    await assert_doctor_can_access_patient(db, user, enc["patient_user_id"])
+    latest = await db.clinical_artifacts.find(
+        {"encounter_id": encounter_id, "artifact_type": "soap_note"}, {"_id": 0}
+    ).sort("created_at", -1).to_list(1)
+    audio = await db.consultation_audio.find_one(
+        {"encounter_id": encounter_id},
+        {"_id": 0, "audio_id": 1, "transcription_status": 1, "duration_seconds": 1,
+         "retention_expires_at": 1, "deleted_at": 1},
+    )
+    return {"encounter_id": encounter_id, "consent": enc.get("recording_consent"),
+            "audio": audio, "note": latest[0] if latest else None}
+
+
+class AcknowledgeIn(BaseModel):
+    index: int
+
+
+@api.post("/artifacts/{artifact_id}/acknowledge")
+async def acknowledge_low_confidence(artifact_id: str, body: AcknowledgeIn, user=Depends(require_doctor)):
+    artifact = await _load_artifact_for_doctor(artifact_id, user)
+    content = artifact.get("edited_content") or artifact["content"]
+    segments = content.get("low_confidence_segments") or []
+    if not 0 <= body.index < len(segments):
+        raise HTTPException(status_code=400, detail="No such low-confidence segment")
+    await db.clinical_artifacts.update_one(
+        {"artifact_id": artifact_id},
+        {"$addToSet": {"acknowledged_segments": body.index}, "$set": {"updated_at": iso()}},
+    )
+    return await db.clinical_artifacts.find_one({"artifact_id": artifact_id}, {"_id": 0})
+
+
+async def purge_expired_audio():
+    """Deletes audio bytes past retention; the metadata row survives with deleted_at set."""
+    due = await db.consultation_audio.find(
+        {"deleted_at": None, "retention_expires_at": {"$lte": iso()}}, {"_id": 0}
+    ).to_list(500)
+    purged = 0
+    for audio in due:
+        path = audio.get("storage_path")
+        if path:
+            Path(path).unlink(missing_ok=True)
+        await db.consultation_audio.update_one(
+            {"audio_id": audio["audio_id"]},
+            {"$set": {"storage_path": None, "transcript": None, "deleted_at": iso()}},
+        )
+        purged += 1
+    return {"purged": purged, "checked": len(due)}
+
+
+@api.post("/admin/audio/purge")
+async def purge_audio_now(user=Depends(require_admin)):
+    return await purge_expired_audio()
 
 
 @api.get("/")

@@ -1,0 +1,10 @@
+crons:
+  - name: audio-retention-purge
+    schedule: "17 3 * * *"
+    method: POST
+    url: "{BACKEND_URL}/api/admin/audio/purge"
+    description: >
+      Hard-deletes consultation audio past its retention window (AUDIO_RETENTION_DAYS).
+      The consultation_audio metadata row survives with deleted_at set, for audit.
+      Requires an admin session; run backend/scripts/audio_retention.py locally for an
+      unauthenticated in-process purge.
