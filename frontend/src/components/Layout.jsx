@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import { toast } from "sonner";
 import {
   LayoutDashboard, MessageSquare, ScanLine, Pill, Users,
-  Stethoscope, Bell, LogOut, Leaf, ChevronDown, Share2, Settings as SettingsIcon, CalendarDays, UserCheck,
+  Stethoscope, Bell, LogOut, Leaf, ChevronDown, Share2, Settings as SettingsIcon, CalendarDays, UserCheck, FileHeart,
 } from "lucide-react";
 
 const patientNav = [
@@ -13,6 +13,7 @@ const patientNav = [
   { to: "/chat", label: "Health Chat", icon: MessageSquare, testid: "nav-chat" },
   { to: "/pill-id", label: "Pill ID", icon: ScanLine, testid: "nav-pill-id" },
   { to: "/medications", label: "Medications", icon: Pill, testid: "nav-medications" },
+  { to: "/visits", label: "Visit Summaries", icon: FileHeart, testid: "nav-visits" },
   { to: "/dependents", label: "Dependents", icon: Users, testid: "nav-dependents" },
   { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
 ];

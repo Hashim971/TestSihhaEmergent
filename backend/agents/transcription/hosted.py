@@ -7,11 +7,17 @@ from emergentintegrations.llm.openai import OpenAISpeechToText
 MODEL = "whisper-1"
 
 
+def _field(segment, key, default=None):
+    if isinstance(segment, dict):
+        return segment.get(key, default)
+    return getattr(segment, key, default)
+
+
 def _confidence(segment) -> float:
-    logprob = getattr(segment, "avg_logprob", None)
+    logprob = _field(segment, "avg_logprob")
     if logprob is None:
         return 0.7
-    return round(min(1.0, max(0.0, math.exp(logprob))), 3)
+    return round(min(1.0, max(0.0, math.exp(float(logprob)))), 3)
 
 
 class HostedTranscriber:
@@ -28,18 +34,26 @@ class HostedTranscriber:
                 timestamp_granularities=["segment"],
             )
 
+        raw = _field(result, "segments") or []
         segments = []
-        for s in getattr(result, "segments", None) or []:
+        for s in raw:
+            text = (_field(s, "text") or "").strip()
+            if not text:
+                continue
             segments.append({
-                "start": round(float(getattr(s, "start", 0.0)), 2),
-                "end": round(float(getattr(s, "end", 0.0)), 2),
-                "text": getattr(s, "text", "").strip(),
+                "start": round(float(_field(s, "start", 0.0) or 0.0), 2),
+                "end": round(float(_field(s, "end", 0.0) or 0.0), 2),
+                "text": text,
                 "confidence": _confidence(s),
             })
+        full_text = _field(result, "text") or ""
+        if not segments and full_text.strip():
+            segments = [{"start": 0.0, "end": float(_field(result, "duration", 0.0) or 0.0),
+                         "text": full_text.strip(), "confidence": 0.7}]
         overall = round(sum(s["confidence"] for s in segments) / len(segments), 3) if segments else 0.0
-        language = getattr(result, "language", None) or (language_hint or "ar")
+        language = _field(result, "language") or (language_hint or "ar")
         return {
-            "text": getattr(result, "text", ""),
+            "text": full_text,
             "segments": segments,
             "overall_confidence": overall,
             "detected_languages": [language],

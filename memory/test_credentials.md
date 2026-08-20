@@ -17,8 +17,12 @@ All accounts use standard email/password JWT auth (httpOnly cookies).
   `/admin/assignments`, which calls `PUT /api/admin/users/{user_id}/role`.
 
 ## Notes
-- Scribe runs on the fixture transcriber by default (`TRANSCRIPTION_PROVIDER=stub`), so recording a
-  consultation produces a full SOAP note with no ASR provider configured. Set it to `hosted` for real audio.
+- Scribe transcription is LIVE (`TRANSCRIPTION_PROVIDER=hosted` in backend/.env) — recording a consultation
+  transcribes the real audio. Automated test suites pin it to the free fixture transcriber by calling
+  `PUT /api/admin/transcription {"provider":"stub"}` as the admin and restoring it afterwards
+  (a runtime override stored in the `app_settings` collection; delete that row to fall back to the env value).
+- Note to the patient: after a doctor signs a SOAP note they draft a bilingual (Arabic + English) plain-language
+  summary, edit it, then `POST /api/artifacts/{id}/publish` sends it to the patient, who reads it at `/visits`.
 - `ALLOW_SELF_ROLE_CHANGE=false` in backend/.env — self role switching returns 403 and the sidebar toggle is
   only rendered for the admin account. Change roles directly in Mongo or via the admin if a doctor is needed.
 - Any account created via `POST /api/auth/register` starts as `patient` with `sharing_enabled: true`

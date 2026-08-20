@@ -220,6 +220,28 @@ Tests: `/app/backend/tests/test_phase3_scribe.py` — 16 pass, covering all seve
 Verified in the browser: recorded-vs-stated BP conflict, Arabic low-confidence passages, Sign disabled until
 acknowledged, drug name "Concor" preserved rather than corrected.
 
+## Real audio switch + Note to the patient (June 2026)
+- **Live transcription**: `TRANSCRIPTION_PROVIDER=hosted` is now the app default and verified end-to-end with real
+  Saudi-dialect Arabic audio (transcript kept the drug name "كونكور", stated 150/95 flagged against the recorded
+  120/92). Fix that unblocked it: the decrypted working file is now written with a real audio extension derived from
+  the upload's mime type (`AUDIO_EXTENSIONS`) — the provider rejects unknown extensions. A runtime override lives in
+  `app_settings.transcription_provider` with admin routes `GET/PUT /api/admin/transcription` (stub | hosted); the
+  pytest suites flip it to `stub` and restore it, so automated runs cost nothing.
+- **Scribe playback**: `components/ScribePanel.jsx` loads `/api/audio/{id}/stream` as a blob into an `<audio>`
+  element beside the note, and each low-confidence passage has a Play button that seeks to its segment start.
+- **Note to the patient** (doctor reviews and sends, never auto-published): `agents/patient_summary.py` +
+  `prompts/patient_summary_v1.md` turn a *signed* SOAP note into `{ar, en}` × `{what_we_discussed, diagnosis_plain,
+  medications[], next_steps[], red_flags[]}` — plain language, no jargon, drug names untouched, nothing invented.
+  Routes: `POST /api/artifacts/{id}/patient-summary` (409 until the note is signed, 409 once a summary was sent),
+  `PATCH /api/artifacts/{id}` for edits (now also 409 on `published`), `POST /api/artifacts/{id}/publish` (sets
+  `published_at`, raises an `info` alert for the patient), `GET /api/patient/visit-summaries` (decorated with the
+  doctor name and reason for visit). `GET /api/encounters/{id}/soap` returns the summary alongside the note.
+  Frontend: `components/PatientSummaryPanel.jsx` (Arabic/English toggle, RTL, inline editing, Send to Patient) inside
+  the scribe panel once signed, and `pages/VisitSummaries.jsx` at `/visits` with a patient nav item.
+- Tests: `/app/backend/tests/test_patient_summary.py` — 13 pass (draft gate, bilingual content, Arabic script,
+  audit refs, publish + patient visibility + alert, published lock, cross-patient isolation, admin-only switch);
+  `test_phase3_scribe.py` still 16 pass. Frontend testing agent iteration_9 — 8/8 flows, no issues.
+
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)
 - P2: Voice input, body-map symptom input, notification email/SMS, counterfeit pill detection, real wearable integrations

@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import logging
 import random
 import base64
 import asyncio
@@ -29,7 +30,8 @@ from agents.briefing_qa import BriefingQAAgent
 from agents.intake import IntakeAgent
 from agents.screening import ScreeningExtractionAgent
 from agents.scribe import ScribeAgent
-from agents.transcription import get_transcriber
+from agents.transcription import get_transcriber, default_provider
+from agents.patient_summary import PatientSummaryAgent
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -1299,6 +1301,8 @@ async def update_artifact(artifact_id: str, body: ArtifactUpdate, user=Depends(r
     artifact = await _load_artifact_for_doctor(artifact_id, user)
     if artifact["status"] == "signed":
         raise HTTPException(status_code=409, detail="Artifact is signed and cannot be modified")
+    if artifact["status"] == "published":
+        raise HTTPException(status_code=409, detail="This summary was already sent to the patient")
     await db.clinical_artifacts.update_one(
         {"artifact_id": artifact_id},
         {"$set": {"edited_content": body.edited_content, "status": "reviewed", "updated_at": iso()}},
@@ -1763,6 +1767,38 @@ AUDIO_DIR = Path(os.environ.get("AUDIO_STORAGE_DIR", "/app/backend/uploads/audio
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 AUDIO_RETENTION_DAYS = int(os.environ.get("AUDIO_RETENTION_DAYS", "30"))
 _fernet = Fernet(os.environ["AUDIO_ENCRYPTION_KEY"].encode())
+PATIENT_SUMMARY_AGENT = PatientSummaryAgent()
+AUDIO_EXTENSIONS = {
+    "audio/webm": "webm", "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/mp4": "mp4",
+    "audio/m4a": "m4a", "audio/x-m4a": "m4a", "audio/wav": "wav", "audio/x-wav": "wav",
+}
+
+
+async def resolved_transcription_provider() -> str:
+    row = await db.app_settings.find_one({"key": "transcription_provider"}, {"_id": 0})
+    return (row or {}).get("value") or default_provider()
+
+
+class TranscriptionProviderIn(BaseModel):
+    provider: str
+
+
+@api.get("/admin/transcription")
+async def get_transcription_provider(user=Depends(require_admin)):
+    return {"provider": await resolved_transcription_provider(), "env_default": default_provider()}
+
+
+@api.put("/admin/transcription")
+async def set_transcription_provider(body: TranscriptionProviderIn, user=Depends(require_admin)):
+    provider = body.provider.strip().lower()
+    if provider not in ("stub", "hosted"):
+        raise HTTPException(status_code=400, detail="Provider must be 'stub' or 'hosted'")
+    await db.app_settings.update_one(
+        {"key": "transcription_provider"},
+        {"$set": {"value": provider, "updated_at": iso(), "updated_by": user["user_id"]}},
+        upsert=True,
+    )
+    return {"provider": provider, "env_default": default_provider()}
 
 
 class ConsentIn(BaseModel):
@@ -1853,13 +1889,15 @@ async def complete_audio_upload(audio_id: str, duration_seconds: float = Form(0.
                   "transcription_status": "processing"}},
     )
 
-    plain = AUDIO_DIR / f"{audio_id}.plain"
+    plain = AUDIO_DIR / f"{audio_id}.{AUDIO_EXTENSIONS.get(audio.get('mime_type'), 'webm')}"
     try:
         plain.write_bytes(_fernet.decrypt(encrypted.read_bytes()))
-        transcript = await get_transcriber().transcribe(str(plain), language_hint="ar-SA")
+        provider = await resolved_transcription_provider()
+        transcript = await get_transcriber(provider).transcribe(str(plain), language_hint="ar-SA")
     except Exception as exc:
         await db.consultation_audio.update_one({"audio_id": audio_id},
                                                {"$set": {"transcription_status": "failed"}})
+        logging.getLogger(__name__).exception("Transcription failed for %s", audio_id)
         raise HTTPException(status_code=502, detail=f"Transcription failed: {type(exc).__name__}")
     finally:
         plain.unlink(missing_ok=True)
@@ -1919,10 +1957,140 @@ async def get_soap_note(encounter_id: str, user=Depends(require_doctor)):
     audio = await db.consultation_audio.find_one(
         {"encounter_id": encounter_id},
         {"_id": 0, "audio_id": 1, "transcription_status": 1, "duration_seconds": 1,
-         "retention_expires_at": 1, "deleted_at": 1},
+         "retention_expires_at": 1, "deleted_at": 1, "transcript": 1, "mime_type": 1},
     )
+    summary = await db.clinical_artifacts.find(
+        {"encounter_id": encounter_id, "artifact_type": "patient_summary"}, {"_id": 0}
+    ).sort("created_at", -1).to_list(1)
     return {"encounter_id": encounter_id, "consent": enc.get("recording_consent"),
-            "audio": audio, "note": latest[0] if latest else None}
+            "audio": audio, "note": latest[0] if latest else None,
+            "patient_summary": summary[0] if summary else None,
+            "transcript_segments": (audio or {}).get("transcript", {}).get("segments") if audio else None}
+
+
+# ---------- Note to the patient: plain-language visit summary ----------
+@api.post("/artifacts/{artifact_id}/patient-summary")
+async def draft_patient_summary(artifact_id: str, user=Depends(require_doctor)):
+    note = await _load_artifact_for_doctor(artifact_id, user)
+    if note["artifact_type"] != "soap_note":
+        raise HTTPException(status_code=400, detail="Patient summaries are drafted from a clinical note")
+    if note["status"] != "signed":
+        raise HTTPException(status_code=409, detail="Sign the clinical note before drafting the patient summary")
+    existing = await db.clinical_artifacts.find_one(
+        {"source_artifact_id": artifact_id, "artifact_type": "patient_summary", "status": "published"},
+        {"_id": 0},
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="A summary for this visit was already sent to the patient")
+
+    enc = await db.encounters.find_one({"encounter_id": note["encounter_id"]}, {"_id": 0})
+    try:
+        content, run_id = await run_agent(
+            db, PATIENT_SUMMARY_AGENT,
+            patient_user_id=note["patient_user_id"],
+            encounter_id=note["encounter_id"],
+            invoked_by=user["user_id"],
+            note=note.get("edited_content") or note["content"],
+            source_artifact_id=artifact_id,
+            reason_for_visit=(enc or {}).get("reason_for_visit"),
+        )
+    except AgentRunFailed as exc:
+        raise _agent_http_error(exc)
+
+    await db.clinical_artifacts.delete_many(
+        {"source_artifact_id": artifact_id, "artifact_type": "patient_summary"})
+    artifact = {
+        "artifact_id": f"art_{uuid.uuid4().hex[:12]}",
+        "artifact_type": "patient_summary",
+        "source_artifact_id": artifact_id,
+        "encounter_id": note["encounter_id"],
+        "patient_user_id": note["patient_user_id"],
+        "doctor_user_id": user["user_id"],
+        "content": content,
+        "edited_content": None,
+        "status": "draft",
+        "published_at": None,
+        "signed_by": None,
+        "signed_at": None,
+        "agent_run_id": run_id,
+        "created_at": iso(),
+        "updated_at": iso(),
+    }
+    await db.clinical_artifacts.insert_one(dict(artifact))
+    await db.agent_runs.update_one(
+        {"agent_run_id": run_id},
+        {"$set": {"output_ref": {"collection": "clinical_artifacts", "id": artifact["artifact_id"]}}},
+    )
+    return artifact
+
+
+@api.post("/artifacts/{artifact_id}/publish")
+async def publish_patient_summary(artifact_id: str, user=Depends(require_doctor)):
+    artifact = await _load_artifact_for_doctor(artifact_id, user)
+    if artifact["artifact_type"] != "patient_summary":
+        raise HTTPException(status_code=400, detail="Only a patient summary can be sent to the patient")
+    if artifact["status"] == "published":
+        raise HTTPException(status_code=409, detail="This summary was already sent to the patient")
+    enc = await db.encounters.find_one({"encounter_id": artifact["encounter_id"]}, {"_id": 0})
+    await db.clinical_artifacts.update_one(
+        {"artifact_id": artifact_id},
+        {"$set": {"status": "published", "published_at": iso(), "published_by": user["user_id"],
+                  "updated_at": iso()}},
+    )
+    await db.agent_runs.update_one(
+        {"agent_run_id": artifact["agent_run_id"]},
+        {"$set": {"human_action": "approved", "human_action_at": iso()}},
+    )
+    await db.alerts.insert_one({
+        "alert_id": f"alert_{uuid.uuid4().hex[:12]}",
+        "user_id": artifact["patient_user_id"],
+        "profile_id": (enc or {}).get("profile_id") or artifact["patient_user_id"],
+        "type": "visit_summary",
+        "severity": "info",
+        "message": f"{user.get('name')} sent you a summary of your visit",
+        "read": False,
+        "created_at": iso(),
+    })
+    return await db.clinical_artifacts.find_one({"artifact_id": artifact_id}, {"_id": 0})
+
+
+@api.get("/patient/visit-summaries")
+async def list_visit_summaries(user=Depends(get_current_user)):
+    rows = await db.clinical_artifacts.find(
+        {"patient_user_id": user["user_id"], "artifact_type": "patient_summary", "status": "published"},
+        {"_id": 0},
+    ).sort("published_at", -1).to_list(50)
+    if not rows:
+        return []
+    encounters = {e["encounter_id"]: e for e in await db.encounters.find(
+        {"encounter_id": {"$in": [r["encounter_id"] for r in rows]}},
+        {"_id": 0, "encounter_id": 1, "reason_for_visit": 1, "scheduled_at": 1},
+    ).to_list(50)}
+    doctors = {d["user_id"]: d for d in await db.users.find(
+        {"user_id": {"$in": list({r["doctor_user_id"] for r in rows})}},
+        {"_id": 0, "user_id": 1, "name": 1, "specialty": 1},
+    ).to_list(50)}
+    for r in rows:
+        enc = encounters.get(r["encounter_id"]) or {}
+        doc = doctors.get(r["doctor_user_id"]) or {}
+        r["reason_for_visit"] = enc.get("reason_for_visit")
+        r["scheduled_at"] = enc.get("scheduled_at")
+        r["doctor_name"] = doc.get("name")
+        r["doctor_specialty"] = doc.get("specialty")
+    return rows
+
+
+@api.get("/audio/{audio_id}/stream")
+async def stream_audio(audio_id: str, user=Depends(require_doctor)):
+    audio = await db.consultation_audio.find_one({"audio_id": audio_id}, {"_id": 0})
+    if not audio:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    await _consented_encounter(audio["encounter_id"], user)
+    if not audio.get("storage_path") or not Path(audio["storage_path"]).exists():
+        raise HTTPException(status_code=410, detail="This recording has passed its retention period")
+    data = _fernet.decrypt(Path(audio["storage_path"]).read_bytes())
+    return Response(content=data, media_type=audio.get("mime_type") or "audio/webm",
+                    headers={"Cache-Control": "no-store"})
 
 
 class AcknowledgeIn(BaseModel):

@@ -12,6 +12,7 @@ import HealthChat from "./pages/HealthChat";
 import PillIdentify from "./pages/PillIdentify";
 import Medications from "./pages/Medications";
 import Dependents from "./pages/Dependents";
+import VisitSummaries from "./pages/VisitSummaries";
 import DoctorPortal from "./pages/DoctorPortal";
 import DoctorDashboard from "./pages/DoctorDashboard";
 import DoctorSchedule from "./pages/DoctorSchedule";
@@ -35,6 +36,7 @@ export default function App() {
             <Route path="/pill-id" element={<PillIdentify />} />
             <Route path="/medications" element={<Medications />} />
             <Route path="/dependents" element={<Dependents />} />
+            <Route path="/visits" element={<VisitSummaries />} />
             <Route path="/doctor" element={<DoctorDashboard />} />
             <Route path="/doctor/patients" element={<DoctorPortal />} />
             <Route path="/doctor/schedule" element={<DoctorSchedule />} />

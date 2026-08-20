@@ -35,6 +35,19 @@ def doctor():
     return login(LAYLA)
 
 
+@pytest.fixture(scope="module", autouse=True)
+def stub_provider():
+    """These tests upload synthetic bytes, so they always run on the fixture transcriber."""
+    adm, _ = login({"email": os.environ.get("ADMIN_EMAIL", "admin@sihha.ai"),
+                    "password": os.environ.get("ADMIN_PASSWORD", "Admin@123")})
+    before = adm.get(f"{API}/admin/transcription", timeout=60).json()["provider"]
+    adm.put(f"{API}/admin/transcription", json={"provider": "stub"}, timeout=60)
+    yield
+    restore, _ = login({"email": os.environ.get("ADMIN_EMAIL", "admin@sihha.ai"),
+                        "password": os.environ.get("ADMIN_PASSWORD", "Admin@123")})
+    restore.put(f"{API}/admin/transcription", json={"provider": before}, timeout=60)
+
+
 @pytest.fixture(scope="module")
 def encounter(doctor, db):
     ds, _ = doctor

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { api } from "../lib/api";
 import { toast } from "sonner";
 import { Mic, Square, ShieldCheck, AlertTriangle, FileText } from "lucide-react";
+import { PatientSummaryPanel } from "./PatientSummaryPanel";
 
 const CONSENT_TEXT =
   "The patient has been told this consultation will be recorded to draft a clinical note, that the recording is " +
@@ -20,6 +21,8 @@ export function ScribePanel({ encounterId }) {
   const chunks = useRef([]);
   const timer = useRef(null);
   const saveTimer = useRef(null);
+  const player = useRef(null);
+  const [audioUrl, setAudioUrl] = useState("");
 
   const load = () => api.get(`/encounters/${encounterId}/soap`).then(({ data }) => {
     setState(data);
@@ -106,6 +109,23 @@ export function ScribePanel({ encounterId }) {
     }, 800);
   };
 
+  const loadPlayback = async (audioId) => {
+    try {
+      const res = await api.get(`/audio/${audioId}/stream`, { responseType: "blob" });
+      setAudioUrl(URL.createObjectURL(res.data));
+    } catch {
+      setAudioUrl("");
+      toast.error("Could not load the recording");
+    }
+  };
+
+  const playSegment = (text) => {
+    const match = (state.transcript_segments || []).find((s) => s.text && text && s.text.includes(text.slice(0, 18)));
+    if (!player.current) return toast.info("Recording is not available");
+    player.current.currentTime = match ? match.start : 0;
+    player.current.play();
+  };
+
   const acknowledge = async (index) => {
     try {
       await api.post(`/artifacts/${note.artifact_id}/acknowledge`, { index });
@@ -178,6 +198,19 @@ export function ScribePanel({ encounterId }) {
             <span className="font-semibold" data-testid="transcript-quality">{draft.transcript_quality}</span>
           </div>
 
+          {state.audio && !state.audio.deleted_at && (
+            <div className="flex items-center gap-3 flex-wrap" data-testid="playback-controls">
+              {audioUrl ? (
+                <audio ref={player} src={audioUrl} controls className="w-full max-w-md" data-testid="scribe-player" />
+              ) : (
+                <button onClick={() => loadPlayback(state.audio.audio_id)} data-testid="load-playback-btn"
+                  className="btn-outline !py-1.5 !px-3 text-xs">
+                  Play the recording alongside the note
+                </button>
+              )}
+            </div>
+          )}
+
           {segments.length > 0 && (
             <div className="border border-terracotta/40 bg-terracotta/5 rounded-xl px-4 py-3" data-testid="low-confidence-block">
               <p className="text-xs font-semibold text-terracotta flex items-center gap-1.5">
@@ -196,6 +229,12 @@ export function ScribePanel({ encounterId }) {
                     <p className="text-xs text-ink-soft flex-1">
                       “{s.text}” · {Math.round((s.confidence || 0) * 100)}% · affects {s.affects_section}
                     </p>
+                    {audioUrl && (
+                      <button onClick={() => playSegment(s.text)} data-testid={`play-segment-${i}`}
+                        className="text-[10px] uppercase tracking-wider font-bold text-forest">
+                        Play
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -240,9 +279,12 @@ export function ScribePanel({ encounterId }) {
             testid="soap-followup-input" onChange={(v) => edit("followup", v)} />
 
           {signed ? (
-            <div className="flex items-center gap-2 text-sm" data-testid="soap-signature-line">
-              <ShieldCheck className="h-4 w-4 text-forest" /> Signed {new Date(note.signed_at).toLocaleString()}
-            </div>
+            <>
+              <div className="flex items-center gap-2 text-sm" data-testid="soap-signature-line">
+                <ShieldCheck className="h-4 w-4 text-forest" /> Signed {new Date(note.signed_at).toLocaleString()}
+              </div>
+              <PatientSummaryPanel noteArtifactId={note.artifact_id} summary={state.patient_summary} onChange={load} />
+            </>
           ) : (
             <button onClick={sign} disabled={pending > 0} data-testid="sign-soap-btn"
               className={`btn-primary ${pending > 0 ? "opacity-40 cursor-not-allowed" : ""}`}>

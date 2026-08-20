@@ -1,0 +1,23 @@
+{
+  "summary": "Frontend-only E2E of the Real Audio Switch + Scribe Playback + Note-to-Patient features on encounter enc_80fea21b764e. All 8 acceptance flows pass: scribe section renders the real-audio SOAP draft (transcript_quality='fair', Arabic content, recorded-vs-stated BP conflict visible on soap-vital-*), Load Playback returns 200 and mounts scribe-player with a valid blob src, Sign SOAP works (confirm dialog accepted, soap-signature-line shown, patient-summary-panel appears), Draft Patient Summary generates in ~15s and defaults to Arabic (dir='rtl', Arabic script present in summary-discussed), summary-lang-en/summary-lang-ar toggle switches content and direction, summary-red-flags and summary-next-steps render, English 'What we discussed' edit persists after reload via debounced PATCH, Send to Patient publishes (summary-published-line shows 'Sent to the patient 8/20/2026, 1:40:49 PM', 0 textareas remain, send button gone). Patient (Omar) sees nav-visits 'Visit Summaries', /visits shows the published card with Dr. Layla Haddad, reason for visit 'Live Arabic audio test', edited English text via visit-lang-en, Arabic via visit-lang-ar (RTL), red-flag block present. No SOAP/clinical jargon leaks to patient view. Regression: patient /dashboard, /chat, /medications and doctor /doctor, /doctor/schedule all load cleanly with nav-visits present.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "PatientSummaryPanel.jsx ListField: reduces `red_flags` to '' when the textarea is emptied on any keystroke (splits then filters empty lines). Minor UX quirk — pressing Enter twice removes an item silently. Not blocking.",
+    "ScribePanel.jsx loadPlayback: on failure it just clears audioUrl with no toast. If /api/audio/{id}/stream 401s or 500s the user sees the button vanish and nothing happens. Consider surfacing an error toast."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100% (8/8 acceptance flows)"},
+  "test_credentials": "Used dr.layla@sihha.ai / Doctor@123 and omar.patient@sihha.ai / Patient@123 from /app/memory/test_credentials.md.",
+  "seed_data_creation": "Signed the existing draft SOAP on enc_80fea21b764e, drafted the patient summary, edited the English 'What we discussed' to 'TEST EDIT: We discussed your recent chest tightness and blood pressure follow-up.', and published it. Omar Farouk now has one published visit summary artifact art_616c8230c41a visible at /visits.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "enc_80fea21b764e patient summary is already PUBLISHED. To retest draft/edit/publish flow, create a fresh encounter from /doctor/schedule (mic is unavailable in browser, so the backend-fixture stub or an already-existing draft SOAP is needed). Backend transcription provider intentionally stays live per E1 — do NOT flip it. Doctor /doctor and /doctor/schedule route fine. Patient nav includes 'Visit Summaries' route /visits.",
+  "rca of the issue": "No functional issues found."
+}
