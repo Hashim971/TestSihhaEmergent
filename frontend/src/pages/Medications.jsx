@@ -10,7 +10,8 @@ export default function Medications() {
   const [schedule, setSchedule] = useState([]);
   const [stats, setStats] = useState({});
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", dosage: "", times: "08:00", instructions: "" });
+  const [form, setForm] = useState({ name: "", dosage: "", times: "08:00", instructions: "",
+    quantity_dispensed: "", units_per_dose: "1", dispensed_on: "" });
 
   const load = useCallback(async () => {
     const pid = activeProfile.id;
@@ -28,9 +29,17 @@ export default function Medications() {
     e.preventDefault();
     const times = form.times.split(",").map((t) => t.trim()).filter(Boolean);
     if (!form.name || !form.dosage || times.length === 0) return toast.error("Fill name, dosage and times");
-    await api.post("/medications", { ...form, times, profile_id: activeProfile.id });
+    await api.post("/medications", {
+      ...form,
+      times,
+      profile_id: activeProfile.id,
+      quantity_dispensed: form.quantity_dispensed ? parseInt(form.quantity_dispensed, 10) : null,
+      units_per_dose: parseFloat(form.units_per_dose || "1"),
+      dispensed_on: form.dispensed_on ? new Date(form.dispensed_on).toISOString() : null,
+    });
     toast.success("Medication added to schedule");
-    setForm({ name: "", dosage: "", times: "08:00", instructions: "" });
+    setForm({ name: "", dosage: "", times: "08:00", instructions: "",
+      quantity_dispensed: "", units_per_dose: "1", dispensed_on: "" });
     setShowForm(false);
     load();
   };
@@ -66,6 +75,13 @@ export default function Medications() {
           <Input label="Dosage" value={form.dosage} onChange={(v) => setForm({ ...form, dosage: v })} testid="med-input-dosage" placeholder="e.g. 500mg" />
           <Input label="Times (comma separated)" value={form.times} onChange={(v) => setForm({ ...form, times: v })} testid="med-input-times" placeholder="08:00, 20:00" />
           <Input label="Instructions" value={form.instructions} onChange={(v) => setForm({ ...form, instructions: v })} testid="med-input-instructions" placeholder="With food" />
+          <Input label="Units in pack" value={form.quantity_dispensed} onChange={(v) => setForm({ ...form, quantity_dispensed: v })} testid="med-input-quantity" placeholder="e.g. 30" />
+          <Input label="Units per dose" value={form.units_per_dose} onChange={(v) => setForm({ ...form, units_per_dose: v })} testid="med-input-units-per-dose" placeholder="1" />
+          <Input label="Dispensed on" value={form.dispensed_on} onChange={(v) => setForm({ ...form, dispensed_on: v })} testid="med-input-dispensed-on" placeholder="YYYY-MM-DD" />
+          <div className="col-span-full -mt-2">
+            <p className="text-xs text-ink-soft">Pack size and dispensing date are optional — add them and Sihha
+              can tell you when the medicine is about to run out.</p>
+          </div>
           <div className="col-span-full">
             <button type="submit" data-testid="med-submit-btn" className="btn-primary">Save Medication</button>
           </div>

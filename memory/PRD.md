@@ -242,6 +242,42 @@ acknowledged, drug name "Concor" preserved rather than corrected.
   audit refs, publish + patient visibility + alert, published lock, cross-patient isolation, admin-only switch);
   `test_phase3_scribe.py` still 16 pass. Frontend testing agent iteration_9 — 8/8 flows, no issues.
 
+## Phase 6 — Pharmacy Marketplace (June 2026)
+Discovery-first marketplace: the patient finds **which partner pharmacy has their medicine**, then buys on the
+partner's own site (`handoff`) or gets directions to the branch. **There is no delivery and no payment.** The
+business model is **sponsored placement** — `pharmacies.sponsorship = {tier, rank, active_until}` puts paying
+partners at the top of the catalog and of every refill offer list, with a visible "Sponsored" badge.
+- **Compliance, three independent layers, fail closed** (`backend/pharmacy/compliance.py`, pure functions, unit
+  tested): controlled substances are rejected at ingestion, at add-to-cart and at checkout (shown as
+  information-only with an in-store notice and no order control); prescription items need an attached,
+  non-rejected, non-expired prescription — Sihha only transmits it, the partner's licensed pharmacist verifies
+  (`require_verified` exists for the dispensing gate, never for Sihha); prescription quantities capped at a
+  90-day supply counting what is already in the basket; SFDA + MOH + CR licences are mandatory and rendered on
+  every listing, basket and order. Every failure returns a named rule (`CONTROLLED_NOT_ORDERABLE`,
+  `MAX_SUPPLY_EXCEEDED`, `PRESCRIPTION_REQUIRED`, …) so the UI can say exactly what is wrong.
+- **Refill engine** (`backend/pharmacy/refill.py`, deterministic, no LLM): `days_remaining` and
+  `projected_runout_date` from pack size vs `dose_logs` marked taken, plus adherence. Due at ≤ 7 days, raised
+  through the existing `alerts` collection (`type: "refill"`, deduped per medication). Matching is exact
+  generic/trade-name only — a low-confidence medication surfaces a "Find this" search, **never** a substitute.
+  Medications gained optional `quantity_dispensed`, `units_per_dose`, `dispensed_on` (also in the Medications form).
+- **Routes**: `/api/pharmacy/pharmacies`, `/catalog`, `/catalog/{id}`, `GET/POST/DELETE /cart` (+ `/items`,
+  `/items/{id}`, `/prescription`), `POST /prescriptions` (Emergent Object Storage) + `GET /prescriptions` +
+  `/prescriptions/{id}/image`, `POST /checkout` (branches on `fulfilment_mode`), `GET /orders`, `/orders/{id}`,
+  `POST /orders/{id}/cancel`, `GET /refills`. Baskets are single-pharmacy (`CART_SINGLE_PHARMACY`).
+  `handoff` orders terminate at `handed_off` with a populated partner deep link; `in_app` orders land on
+  `awaiting_pharmacist_verification` (prescription involved) or `confirmed`.
+- **Frontend**: `/pharmacy` (Refills Due leads, search + categories, bilingual product cards, partner licences,
+  cart slide-over with per-line compliance messages, branching checkout) and `/pharmacy/orders` with a status
+  timeline. Components in `components/pharmacy/`.
+- **Seed** (`seed_pharmacy.py`): Nahdi (handoff, sponsored) + Al Dawaa (in_app) with clearly fake licences,
+  43 products / 67 listings across all categories including 3 controlled and 10 prescription-only, and
+  omar.patient sitting 4 days from running out of Concor.
+- Tests: `test_pharmacy_compliance.py` (23), `test_pharmacy_refill.py` (12), `test_pharmacy_routes.py`
+  (integration, all nine acceptance criteria). Frontend testing agent iteration_10: 10/10 flows, no issues.
+- Also fixed: README data-model/tech-stack corrections; the previsit agent now drops citations that do not
+  match a real finding or intake answer; the doctor dashboard no longer lists encounters whose patient was
+  deleted.
+
 ## Backlog- P1: Appointment booking flow (patent workflow 4), calorie tracking alerts, predictive analytics trends endpoint
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)
 - P2: Voice input, body-map symptom input, notification email/SMS, counterfeit pill detection, real wearable integrations

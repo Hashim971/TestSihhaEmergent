@@ -108,4 +108,12 @@ class PreVisitBriefingAgent:
             ))
             brief = PreVisitBrief(**(server.parse_llm_json(repair) or {}))
 
-        return brief.model_dump(), input_refs
+        # A citation must point at a finding or intake answer that actually exists in the record.
+        valid_findings = {f.get("finding_id") for r in context["screening_reports"]["reports"]
+                          for f in (r.get("findings") or [])}
+        valid_intake = {a.get("question_id") for a in (context["intake"] or {}).get("answered", [])}
+        brief_dict = brief.model_dump()
+        for concern in brief_dict["chief_concerns"]:
+            concern["screening_refs"] = [r for r in concern["screening_refs"] if r in valid_findings]
+            concern["intake_refs"] = [r for r in concern["intake_refs"] if r in valid_intake]
+        return brief_dict, input_refs

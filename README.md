@@ -55,11 +55,11 @@ Everything is built on a single FastAPI backend and a single-page React frontend
 
 | Layer | Choice |
 |---|---|
-| Frontend | React (CRA + craco), React Router, Tailwind CSS, shadcn/ui, lucide-react, recharts, jsPDF, sonner |
+| Frontend | React (CRA + craco), React Router, Tailwind CSS (hand-rolled `.card` / `.btn-primary` / `.btn-outline` in `index.css` — shadcn is **not** installed), lucide-react, recharts, jsPDF, sonner |
 | Backend | FastAPI, Motor (async MongoDB), Pydantic, PyJWT, bcrypt, emergentintegrations (`LlmChat`), gradio_client |
 | Database | MongoDB Atlas (`cluster0.ntwaj1g.mongodb.net`, db: `sihha_ai`) |
 | AI — Text/Vision | Emergent Universal LLM Key → GPT-5.5 (text + vision) |
-| AI — CNN | HuggingFace Space `Hashim971/Pills-Classifier` via `gradio_client` |
+| AI — CNN | HuggingFace Space `Hashim971/Tessihha` via `gradio_client` (override with `HF_SPACE`) |
 | Auth | JWT (15 min access + 7 d refresh) in httpOnly cookies, Bearer fallback |
 | Process manager | supervisor (`frontend`, `backend`) |
 
@@ -106,7 +106,7 @@ Everything is built on a single FastAPI backend and a single-page React frontend
 │       │   ├── Layout.jsx
 │       │   ├── ProtectedRoute.jsx
 │       │   ├── YesNo.jsx
-│       │   └── ui/          shadcn primitives
+│       │   └── pharmacy/     RefillsDue, CatalogGrid, CartDrawer, PharmacyList
 │       └── pages/
 │           ├── Landing.jsx
 │           ├── Auth.jsx
@@ -195,7 +195,7 @@ All routes are prefixed with `/api`.
 ### Health Profile
 | Method | Route | Purpose |
 |---|---|---|
-| PUT | `/user/profile` (a.k.a. `/profile/health`) | Update onboarding/settings health data |
+| PUT | `/api/profile/health` | Update onboarding/settings health data |
 
 ### AI
 | Method | Route | Purpose |
@@ -213,30 +213,35 @@ All routes are prefixed with `/api`.
 | POST | `/medications/{id}/dose` | Log dose taken / missed |
 | GET/POST/PUT/DELETE | `/dependents` | Dependent CRUD |
 | GET | `/doctor/patients` | Patients who opted-in to sharing |
-| GET | `/doctor/patients/{id}` | Full patient summary |
+| GET | `/doctor/patients/{id}/summary` | Full patient summary |
 | GET/POST | `/alerts` | Alerts list + mark-read |
 
 ---
 
 ## Data Model
 
-MongoDB collections (all `_id` serialized via `PyObjectId`):
+MongoDB collections. **Every document is keyed by a prefixed UUID string** (`user_abc123def456`,
+`enc_...`, `item_...`); Mongo's `_id` is never returned — all queries project it out with `{"_id": 0}`.
+There is no `PyObjectId` and no ODM. Everything lives in one `server.py`; there is no `models.py`
+or `db.py`.
 
 | Collection | Shape |
 |---|---|
-| `users` | `{_id, email, password_hash, name, role, health_profile, share_with_doctors, ...}` |
-| `user_sessions` | `{_id, user_id, refresh_token_hash, expires_at}` |
-| `dependents` | `{_id, user_id, name, dob, ...}` |
-| `vitals` | `{_id, user_id|dependent_id, type, value, source: manual|wearable, taken_at}` |
-| `alerts` | `{_id, user_id, kind, message, read, created_at}` |
-| `chat_sessions` | `{_id, user_id, started_at, kind: chat|screening}` |
-| `chat_messages` | `{_id, session_id, role, content, created_at}` |
-| `health_reports` | `{_id, user_id, session_id, pdf_meta, created_at}` |
-| `pill_history` | `{_id, user_id, image_url, pill_name, cnn_label, gradcam_url, details, created_at}` |
-| `medications` | `{_id, user_id|dependent_id, name, dose, schedule, ...}` |
-| `dose_logs` | `{_id, medication_id, status: taken|missed, at}` |
+| `users` | `{user_id, email, password_hash, name, role, health_profile, sharing_enabled, assigned_doctor_user_id, ...}` |
+| `dependents` | `{dependent_id, user_id, name, date_of_birth, relation, ...}` |
+| `vitals` | One document per reading session carrying every metric as optional fields: `{vital_id, profile_id, heart_rate, systolic, diastolic, glucose, spo2, temperature, source: manual\|wearable, recorded_at}` |
+| `alerts` | `{alert_id, user_id, profile_id, type, severity, message, read, created_at}` |
+| `chat_sessions` / `chat_messages` | `{session_id, profile_id, kind}` / `{message_id, session_id, role, content}` |
+| `health_reports` | `{report_id, user_id, session_id, content, findings, created_at}` |
+| `pill_history` | `{pill_id, profile_id, pill_name, cnn_label, gradcam, details, created_at}` |
+| `medications` | `{medication_id, profile_id, name, dosage, times[], instructions, quantity_dispensed, units_per_dose, dispensed_on, active}` |
+| `dose_logs` | `{dose_log_id, medication_id, profile_id, date, time, status: taken\|missed}` |
+| `encounters` / `clinical_artifacts` / `agent_runs` / `intake_forms` / `briefing_threads` / `consultation_audio` | Clinical agent suite (Phases 1–3) |
+| `pharmacies` / `catalog_items` / `carts` / `orders` / `prescriptions` | Pharmacy marketplace (Phase 6) |
 
-All timestamps are `datetime.now(timezone.utc)`.
+Patient data is scoped by `profile_id` (the user's own id, or a dependent's id) via `profile_key()`.
+All timestamps are **ISO 8601 strings** written by `iso()` — never `datetime` objects — so range
+queries are string comparisons.
 
 ---
 

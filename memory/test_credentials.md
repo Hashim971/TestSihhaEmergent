@@ -17,6 +17,9 @@ All accounts use standard email/password JWT auth (httpOnly cookies).
   `/admin/assignments`, which calls `PUT /api/admin/users/{user_id}/role`.
 
 ## Notes
+- Pharmacy marketplace (Phase 6): seed with `cd /app/backend && set -a && . ./.env && set +a && python seed_pharmacy.py`.
+  omar.patient then has Concor 4 days from runout. Partners: Nahdi (handoff + sponsored) and Al Dawaa (in_app).
+  Prescription images go to Emergent Object Storage; there is no delivery and no payment anywhere.
 - Scribe transcription is LIVE (`TRANSCRIPTION_PROVIDER=hosted` in backend/.env) — recording a consultation
   transcribes the real audio. Automated test suites pin it to the free fixture transcriber by calling
   `PUT /api/admin/transcription {"provider":"stub"}` as the admin and restoring it afterwards

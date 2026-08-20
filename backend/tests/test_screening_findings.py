@@ -172,7 +172,9 @@ class TestSharingAndDoctorView:
         ds, _ = doctor
         current = ds.get(f"{API}/doctor/screening/{encounter['encounter_id']}", timeout=60).json()
         row = next(x for x in current["reports"] if x["report_id"] == screening["report_id"])
-        valid = {f["finding_id"] for f in row["findings"]}
+        # The briefing may cite any of the patient's recent screenings, not only this one.
+        valid = {f["finding_id"] for rep in current["reports"] for f in rep["findings"]}
+        assert {f["finding_id"] for f in row["findings"]} <= valid
         r = ds.post(f"{API}/agents/previsit/{encounter['encounter_id']}", timeout=240)
         assert r.status_code == 200, r.text
         artifact = r.json()

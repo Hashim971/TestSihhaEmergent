@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import logging
+import re
 import random
 import base64
 import asyncio
@@ -277,6 +278,11 @@ async def seed_and_index():
     await db.intake_forms.create_index([("patient_user_id", 1), ("status", 1)])
     await db.consultation_audio.create_index("encounter_id")
     await db.consultation_audio.create_index([("deleted_at", 1), ("retention_expires_at", 1)])
+    await db.catalog_items.create_index([("pharmacy_id", 1), ("active", 1)])
+    await db.catalog_items.create_index([("name_en", "text"), ("name_ar", "text"), ("generic_name", "text")])
+    await db.orders.create_index([("profile_id", 1), ("created_at", -1)])
+    await db.carts.create_index("profile_id", unique=True)
+    await db.prescriptions.create_index([("profile_id", 1), ("verification_status", 1)])
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@sihha.ai").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@123")
     existing = await db.users.find_one({"email": admin_email})
@@ -831,6 +837,9 @@ class MedicationCreate(BaseModel):
     times: List[str]
     instructions: Optional[str] = None
     profile_id: Optional[str] = None
+    quantity_dispensed: Optional[int] = None
+    units_per_dose: float = 1
+    dispensed_on: Optional[str] = None
 
 
 @api.post("/medications")
@@ -843,6 +852,9 @@ async def add_medication(body: MedicationCreate, user=Depends(get_current_user))
         "dosage": body.dosage,
         "times": body.times,
         "instructions": body.instructions,
+        "quantity_dispensed": body.quantity_dispensed,
+        "units_per_dose": body.units_per_dose,
+        "dispensed_on": body.dispensed_on,
         "active": True,
         "created_at": iso(),
     }
@@ -1705,7 +1717,8 @@ async def doctor_dashboard(user=Depends(require_doctor)):
             "intake_status": intakes.get(e["encounter_id"]),
         }
 
-    upcoming = [e for e in encounters if e["status"] in ("scheduled", "in_progress")]
+    upcoming = [e for e in encounters
+                if e["status"] in ("scheduled", "in_progress") and names.get(e["patient_user_id"])]
     todays = [row(e) for e in upcoming if (e["scheduled_at"] or "")[:10] == today]
     this_week = [row(e) for e in upcoming if today <= (e["scheduled_at"] or "")[:10] and e["scheduled_at"] <= week_end]
     needs_briefing = [r for r in this_week if r["briefing_status"] is None]
@@ -2137,6 +2150,466 @@ async def purge_audio_now(user=Depends(require_admin)):
 @api.get("/")
 async def root():
     return {"app": "Sihha AI", "status": "ok"}
+# ---------- Phase 6: Pharmacy Marketplace ----------
+# Sihha holds no stock, dispenses nothing and never verifies a prescription. Every order is
+# fulfilled by a licensed partner. No LLM is involved in ordering, matching or compliance.
+import requests
+from pharmacy import compliance
+from pharmacy import refill as refill_engine
+
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+STORAGE_APP = "sihha-ai"
+_storage_key = None
+RX_MIME = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp",
+           "pdf": "application/pdf", "heic": "image/heic"}
+PRESCRIPTION_VALID_DAYS = 180
+
+
+def init_storage(force: bool = False):
+    global _storage_key
+    if _storage_key and not force:
+        return _storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": os.environ["EMERGENT_LLM_KEY"]},
+                         timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    for attempt in (0, 1):
+        resp = requests.put(f"{STORAGE_URL}/objects/{path}",
+                            headers={"X-Storage-Key": init_storage(force=attempt == 1),
+                                     "Content-Type": content_type},
+                            data=data, timeout=120)
+        if resp.status_code == 404 and attempt == 0:
+            continue
+        resp.raise_for_status()
+        return resp.json()
+
+
+def get_object(path: str):
+    for attempt in (0, 1):
+        resp = requests.get(f"{STORAGE_URL}/objects/{path}",
+                            headers={"X-Storage-Key": init_storage(force=attempt == 1)}, timeout=60)
+        if resp.status_code == 404 and attempt == 0:
+            continue
+        resp.raise_for_status()
+        return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+
+PHARMACY_PUBLIC_FIELDS = ("pharmacy_id", "name_en", "name_ar", "sfda_license", "moh_license",
+                          "cr_number", "fulfilment_mode", "handoff_url_template", "branches", "active")
+
+
+def _is_sponsored(pharmacy: dict) -> bool:
+    sponsorship = pharmacy.get("sponsorship") or {}
+    if not sponsorship.get("tier"):
+        return False
+    until = sponsorship.get("active_until")
+    return not until or until > iso()
+
+
+def _directions_url(branch: dict) -> Optional[str]:
+    if not branch or branch.get("lat") is None or branch.get("lng") is None:
+        return None
+    return f"https://www.google.com/maps/dir/?api=1&destination={branch['lat']},{branch['lng']}"
+
+
+def _pharmacy_card(pharmacy: dict) -> dict:
+    branches = pharmacy.get("branches") or []
+    card = {k: pharmacy.get(k) for k in PHARMACY_PUBLIC_FIELDS}
+    card["sponsored"] = _is_sponsored(pharmacy)
+    card["sponsorship_tier"] = (pharmacy.get("sponsorship") or {}).get("tier")
+    card["directions_url"] = _directions_url(branches[0] if branches else None)
+    return card
+
+
+def _rank_key(pharmacy: dict):
+    sponsorship = pharmacy.get("sponsorship") or {}
+    return (0 if _is_sponsored(pharmacy) else 1, sponsorship.get("rank") or 99)
+
+
+def _handoff_url(pharmacy: dict, skus: List[str], branch_id: Optional[str] = None) -> Optional[str]:
+    template = pharmacy.get("handoff_url_template")
+    if not template:
+        return None
+    return (template.replace("{sku_list}", ",".join(skus))
+            .replace("{branch_id}", branch_id or ((pharmacy.get("branches") or [{}])[0].get("branch_id") or "")))
+
+
+async def _cart_doc(user, profile_id: Optional[str]):
+    profile = profile_key(user, profile_id)
+    cart = await db.carts.find_one({"profile_id": profile}, {"_id": 0})
+    if not cart:
+        cart = {
+            "cart_id": f"cart_{uuid.uuid4().hex[:12]}",
+            "user_id": user["user_id"],
+            "profile_id": profile,
+            "pharmacy_id": None,
+            "items": [],
+            "prescription_id": None,
+            "created_at": iso(),
+            "updated_at": iso(),
+        }
+        await db.carts.insert_one(dict(cart))
+    return cart
+
+
+async def _hydrate_cart(cart: dict) -> dict:
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": cart["pharmacy_id"]}, {"_id": 0}) \
+        if cart.get("pharmacy_id") else None
+    items, entries = [], []
+    for line in cart.get("items", []):
+        item = await db.catalog_items.find_one({"item_id": line["item_id"]}, {"_id": 0})
+        if not item:
+            continue
+        entries.append({"item": item, "qty": line["qty"]})
+        items.append({**line, "requires_prescription": item.get("requires_prescription", False),
+                      "days_supply": item.get("days_supply"),
+                      "stock_status": item.get("stock_status"),
+                      "violations": compliance.check_add_to_cart(item, pharmacy or {}, line["qty"])})
+    prescription = await db.prescriptions.find_one({"prescription_id": cart["prescription_id"]}, {"_id": 0}) \
+        if cart.get("prescription_id") else None
+    subtotal = round(sum(l["qty"] * l["price_sar"] for l in cart.get("items", [])), 2)
+    return {
+        **cart,
+        "items": items,
+        "pharmacy": _pharmacy_card(pharmacy) if pharmacy else None,
+        "prescription": prescription,
+        "subtotal_sar": subtotal,
+        "delivery_fee_sar": 0.0,
+        "total_sar": subtotal,
+        "violations": compliance.check_checkout(entries, pharmacy or {}, prescription) if entries else [],
+    }
+
+
+@api.get("/pharmacy/pharmacies")
+async def list_pharmacies(city: Optional[str] = None, delivery_zone: Optional[str] = None,
+                          user=Depends(get_current_user)):
+    rows = await db.pharmacies.find({"active": True}, {"_id": 0}).to_list(100)
+    out = []
+    for pharmacy in rows:
+        branches = pharmacy.get("branches") or []
+        if city:
+            branches = [b for b in branches if (b.get("city") or "").lower() == city.lower()]
+        if delivery_zone:
+            branches = [b for b in branches if delivery_zone in (b.get("delivery_zones") or [])]
+        if (city or delivery_zone) and not branches:
+            continue
+        card = _pharmacy_card(pharmacy)
+        card["branches"] = [{**b, "directions_url": _directions_url(b)} for b in branches]
+        out.append(card)
+    out.sort(key=lambda p: (0 if p["sponsored"] else 1, p["name_en"]))
+    return out
+
+
+@api.get("/pharmacy/catalog")
+async def search_catalog(q: Optional[str] = None, category: Optional[str] = None,
+                         pharmacy_id: Optional[str] = None, limit: int = Query(24, le=100),
+                         skip: int = 0, user=Depends(get_current_user)):
+    query = {"active": True}
+    if category:
+        query["category"] = category
+    if pharmacy_id:
+        query["pharmacy_id"] = pharmacy_id
+    if q:
+        needle = re.escape(q.strip())
+        query["$or"] = [{"name_en": {"$regex": needle, "$options": "i"}},
+                        {"name_ar": {"$regex": needle, "$options": "i"}},
+                        {"generic_name": {"$regex": needle, "$options": "i"}}]
+    rows = await db.catalog_items.find(query, {"_id": 0}).to_list(500)
+    pharmacies = {p["pharmacy_id"]: p for p in await db.pharmacies.find({}, {"_id": 0}).to_list(100)}
+    decorated = []
+    for item in rows:
+        pharmacy = pharmacies.get(item["pharmacy_id"]) or {}
+        decorated.append({
+            **item,
+            "pharmacy": _pharmacy_card(pharmacy) if pharmacy else None,
+            "orderable": compliance.is_orderable(item, pharmacy),
+            "violations": compliance.check_catalog_item(item, pharmacy),
+        })
+    decorated.sort(key=lambda d: (0 if d["orderable"] else 1,
+                                  _rank_key(pharmacies.get(d["pharmacy_id"]) or {}), d["price_sar"]))
+    return {"total": len(decorated), "items": decorated[skip:skip + limit]}
+
+
+@api.get("/pharmacy/catalog/{item_id}")
+async def get_catalog_item(item_id: str, user=Depends(get_current_user)):
+    item = await db.catalog_items.find_one({"item_id": item_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="Product not found")
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": item["pharmacy_id"]}, {"_id": 0}) or {}
+    return {**item, "pharmacy": _pharmacy_card(pharmacy) if pharmacy else None,
+            "orderable": compliance.is_orderable(item, pharmacy),
+            "violations": compliance.check_catalog_item(item, pharmacy)}
+
+
+class CartItemIn(BaseModel):
+    item_id: str
+    qty: int = 1
+    profile_id: Optional[str] = None
+
+
+@api.get("/pharmacy/cart")
+async def get_cart(profile_id: Optional[str] = None, user=Depends(get_current_user)):
+    return await _hydrate_cart(await _cart_doc(user, profile_id))
+
+
+@api.post("/pharmacy/cart/items")
+async def add_cart_item(body: CartItemIn, user=Depends(get_current_user)):
+    item = await db.catalog_items.find_one({"item_id": body.item_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="Product not found")
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": item["pharmacy_id"]}, {"_id": 0}) or {}
+    cart = await _cart_doc(user, body.profile_id)
+    if cart.get("pharmacy_id") and cart["pharmacy_id"] != item["pharmacy_id"]:
+        raise HTTPException(status_code=422, detail={"violations": [
+            {"rule": "CART_SINGLE_PHARMACY", "item_id": body.item_id,
+             "message": "A basket belongs to one partner pharmacy. Clear it before ordering from another."}]})
+    already = next((l["qty"] for l in cart["items"] if l["item_id"] == body.item_id), 0)
+    violations = compliance.check_add_to_cart(item, pharmacy, body.qty, qty_already_in_cart=already)
+    if violations:
+        raise HTTPException(status_code=422, detail={"violations": violations})
+    lines = [l for l in cart["items"] if l["item_id"] != body.item_id]
+    lines.append({"item_id": item["item_id"], "sku": item["sku"], "name_en": item["name_en"],
+                  "name_ar": item["name_ar"], "qty": body.qty + already, "price_sar": item["price_sar"]})
+    await db.carts.update_one({"cart_id": cart["cart_id"]},
+                              {"$set": {"items": lines, "pharmacy_id": item["pharmacy_id"],
+                                        "updated_at": iso()}})
+    return await _hydrate_cart(await db.carts.find_one({"cart_id": cart["cart_id"]}, {"_id": 0}))
+
+
+@api.delete("/pharmacy/cart/items/{item_id}")
+async def remove_cart_item(item_id: str, profile_id: Optional[str] = None,
+                           user=Depends(get_current_user)):
+    cart = await _cart_doc(user, profile_id)
+    lines = [l for l in cart["items"] if l["item_id"] != item_id]
+    await db.carts.update_one({"cart_id": cart["cart_id"]},
+                              {"$set": {"items": lines, "updated_at": iso(),
+                                        "pharmacy_id": cart["pharmacy_id"] if lines else None}})
+    return await _hydrate_cart(await db.carts.find_one({"cart_id": cart["cart_id"]}, {"_id": 0}))
+
+
+@api.delete("/pharmacy/cart")
+async def clear_cart(profile_id: Optional[str] = None, user=Depends(get_current_user)):
+    cart = await _cart_doc(user, profile_id)
+    await db.carts.update_one({"cart_id": cart["cart_id"]},
+                              {"$set": {"items": [], "pharmacy_id": None, "prescription_id": None,
+                                        "updated_at": iso()}})
+    return await _hydrate_cart(await db.carts.find_one({"cart_id": cart["cart_id"]}, {"_id": 0}))
+
+
+class CartPrescriptionIn(BaseModel):
+    prescription_id: Optional[str] = None
+    profile_id: Optional[str] = None
+
+
+@api.post("/pharmacy/cart/prescription")
+async def attach_cart_prescription(body: CartPrescriptionIn, user=Depends(get_current_user)):
+    cart = await _cart_doc(user, body.profile_id)
+    if body.prescription_id:
+        rx = await db.prescriptions.find_one(
+            {"prescription_id": body.prescription_id, "user_id": user["user_id"]}, {"_id": 0})
+        if not rx:
+            raise HTTPException(status_code=404, detail="Prescription not found")
+    await db.carts.update_one({"cart_id": cart["cart_id"]},
+                              {"$set": {"prescription_id": body.prescription_id, "updated_at": iso()}})
+    return await _hydrate_cart(await db.carts.find_one({"cart_id": cart["cart_id"]}, {"_id": 0}))
+
+
+@api.post("/pharmacy/prescriptions")
+async def create_prescription(source: str = Form("upload"), encounter_id: Optional[str] = Form(None),
+                              issued_date: Optional[str] = Form(None), profile_id: Optional[str] = Form(None),
+                              file: Optional[UploadFile] = File(None), user=Depends(get_current_user)):
+    if source not in ("upload", "encounter"):
+        raise HTTPException(status_code=400, detail="source must be 'upload' or 'encounter'")
+    storage_path = None
+    content_type = None
+    if source == "upload":
+        if not file:
+            raise HTTPException(status_code=400, detail="A prescription image or PDF is required")
+        ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+        if ext not in RX_MIME:
+            raise HTTPException(status_code=400, detail="Upload a JPG, PNG, WEBP, HEIC or PDF")
+        data = await file.read()
+        if len(data) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File is larger than 10 MB")
+        content_type = RX_MIME[ext]
+        try:
+            result = put_object(f"{STORAGE_APP}/prescriptions/{user['user_id']}/{uuid.uuid4().hex}.{ext}",
+                                data, content_type)
+        except Exception:
+            logging.getLogger(__name__).exception("Prescription upload failed")
+            raise HTTPException(status_code=502, detail="Could not store the prescription. Try again.")
+        storage_path = result["path"]
+    else:
+        enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0}) if encounter_id else None
+        if not enc or enc["patient_user_id"] != user["user_id"]:
+            raise HTTPException(status_code=404, detail="Encounter not found")
+
+    rx = {
+        "prescription_id": f"rx_{uuid.uuid4().hex[:12]}",
+        "user_id": user["user_id"],
+        "profile_id": profile_key(user, profile_id),
+        "source": source,
+        "encounter_id": encounter_id,
+        "image_path": storage_path,
+        "content_type": content_type,
+        "issued_date": issued_date,
+        "verification_status": "pending",
+        "verified_by_pharmacy_id": None,
+        "verified_at": None,
+        "rejection_reason": None,
+        "expires_at": iso(now_utc() + timedelta(days=PRESCRIPTION_VALID_DAYS)),
+        "is_deleted": False,
+        "created_at": iso(),
+    }
+    await db.prescriptions.insert_one(dict(rx))
+    return rx
+
+
+@api.get("/pharmacy/prescriptions")
+async def list_prescriptions(profile_id: Optional[str] = None, user=Depends(get_current_user)):
+    return await db.prescriptions.find(
+        {"profile_id": profile_key(user, profile_id), "is_deleted": {"$ne": True}}, {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+
+
+@api.get("/pharmacy/prescriptions/{prescription_id}/image")
+async def get_prescription_image(prescription_id: str, user=Depends(get_current_user)):
+    rx = await db.prescriptions.find_one(
+        {"prescription_id": prescription_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not rx or not rx.get("image_path"):
+        raise HTTPException(status_code=404, detail="Prescription image not found")
+    data, content_type = get_object(rx["image_path"])
+    return Response(content=data, media_type=rx.get("content_type") or content_type,
+                    headers={"Cache-Control": "no-store"})
+
+
+class CheckoutIn(BaseModel):
+    profile_id: Optional[str] = None
+    branch_id: Optional[str] = None
+    note: Optional[str] = None
+
+
+@api.post("/pharmacy/checkout")
+async def checkout(body: CheckoutIn, user=Depends(get_current_user)):
+    cart = await _cart_doc(user, body.profile_id)
+    if not cart["items"]:
+        raise HTTPException(status_code=422, detail={"violations": [
+            {"rule": compliance.EMPTY_CART, "item_id": None, "message": "Your basket is empty."}]})
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": cart["pharmacy_id"]}, {"_id": 0}) or {}
+    entries = []
+    for line in cart["items"]:
+        item = await db.catalog_items.find_one({"item_id": line["item_id"]}, {"_id": 0})
+        if not item:
+            raise HTTPException(status_code=422, detail={"violations": [
+                {"rule": compliance.ITEM_UNAVAILABLE, "item_id": line["item_id"],
+                 "message": f"{line['name_en']} is no longer listed."}]})
+        entries.append({"item": item, "qty": line["qty"]})
+    prescription = await db.prescriptions.find_one({"prescription_id": cart["prescription_id"]}, {"_id": 0}) \
+        if cart.get("prescription_id") else None
+
+    violations = compliance.check_checkout(entries, pharmacy, prescription)
+    if violations:
+        raise HTTPException(status_code=422, detail={"violations": violations})
+
+    needs_pharmacist = any(e["item"].get("requires_prescription") for e in entries)
+    mode = pharmacy.get("fulfilment_mode", "handoff")
+    subtotal = round(sum(l["qty"] * l["price_sar"] for l in cart["items"]), 2)
+    if mode == "handoff":
+        status = "handed_off"
+        note = "Basket handed off to the partner pharmacy. They dispense, verify and complete the sale."
+    elif needs_pharmacist:
+        status = "awaiting_pharmacist_verification"
+        note = "Sent to the pharmacy. Their licensed pharmacist verifies the prescription before dispensing."
+    else:
+        status = "confirmed"
+        note = "Sent to the pharmacy for preparation. Collect it at the branch."
+
+    branch = next((b for b in (pharmacy.get("branches") or []) if b.get("branch_id") == body.branch_id),
+                  (pharmacy.get("branches") or [{}])[0])
+    order = {
+        "order_id": f"ord_{uuid.uuid4().hex[:12]}",
+        "user_id": user["user_id"],
+        "profile_id": cart["profile_id"],
+        "pharmacy_id": pharmacy.get("pharmacy_id"),
+        "pharmacy_snapshot": _pharmacy_card(pharmacy),
+        "fulfilment_mode": mode,
+        "items": [{"item_id": l["item_id"], "sku": l["sku"], "name_en": l["name_en"],
+                   "name_ar": l["name_ar"], "qty": l["qty"], "price_sar": l["price_sar"]}
+                  for l in cart["items"]],
+        "prescription_id": cart.get("prescription_id"),
+        "status": status,
+        "status_history": [{"status": status, "at": iso(), "note": note}],
+        "subtotal_sar": subtotal,
+        "delivery_fee_sar": 0.0,
+        "total_sar": subtotal,
+        "delivery_address": None,
+        "pickup_branch": {**branch, "directions_url": _directions_url(branch)} if branch else None,
+        "handoff_url": _handoff_url(pharmacy, [l["sku"] for l in cart["items"]], body.branch_id)
+        if mode == "handoff" else None,
+        "note": body.note,
+        "created_at": iso(),
+        "updated_at": iso(),
+    }
+    await db.orders.insert_one(dict(order))
+    await db.carts.update_one({"cart_id": cart["cart_id"]},
+                              {"$set": {"items": [], "pharmacy_id": None, "prescription_id": None,
+                                        "updated_at": iso()}})
+    return order
+
+
+@api.get("/pharmacy/orders")
+async def list_orders(profile_id: Optional[str] = None, user=Depends(get_current_user)):
+    return await db.orders.find({"profile_id": profile_key(user, profile_id)}, {"_id": 0}
+                                ).sort("created_at", -1).to_list(50)
+
+
+@api.get("/pharmacy/orders/{order_id}")
+async def get_order(order_id: str, user=Depends(get_current_user)):
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order["user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="This order belongs to another account")
+    return order
+
+
+CANCELLABLE = ("draft", "awaiting_pharmacist_verification", "confirmed")
+
+
+@api.post("/pharmacy/orders/{order_id}/cancel")
+async def cancel_order(order_id: str, user=Depends(get_current_user)):
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order["user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="This order belongs to another account")
+    if order["status"] not in CANCELLABLE:
+        raise HTTPException(status_code=409,
+                            detail=f"An order in '{order['status']}' can no longer be cancelled here")
+    entry = {"status": "cancelled", "at": iso(), "note": "Cancelled by the patient"}
+    await db.orders.update_one({"order_id": order_id},
+                               {"$set": {"status": "cancelled", "updated_at": iso()},
+                                "$push": {"status_history": entry}})
+    return await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+
+
+@api.get("/pharmacy/refills")
+async def get_refills(profile_id: Optional[str] = None, notify: bool = False,
+                      user=Depends(get_current_user)):
+    profile = profile_key(user, profile_id)
+    refills = await refill_engine.compute_refills(db, profile)
+    if notify:
+        refills["alerts_raised"] = await refill_engine.raise_refill_alerts(
+            db, user["user_id"], profile, refills)
+    return refills
+
+
+
 
 
 app.include_router(api)
