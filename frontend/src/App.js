@@ -25,12 +25,16 @@ import Intake from "./pages/Intake";
 import EncounterDetail from "./pages/EncounterDetail";
 import Settings from "./pages/Settings";
 import AuthCallback from "./pages/AuthCallback";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
+import { ServiceUnavailable } from "./components/ServiceUnavailable";
 
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
         <AppRouter />
+        <ServiceUnavailable />
         <Toaster position="top-right" richColors />
       </AuthProvider>
     </BrowserRouter>
@@ -47,6 +51,8 @@ function AppRouter() {
           <Route path="/" element={<Landing />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/auth/clinician" element={<Auth portal="doctor" />} />
+          <Route path="/auth/forgot" element={<ForgotPassword />} />
+          <Route path="/auth/reset" element={<ResetPassword />} />
           <Route path="/onboarding" element={<Onboarding />} />
           <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route path="/dashboard" element={<Dashboard />} />

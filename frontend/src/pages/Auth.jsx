@@ -189,6 +189,13 @@ export default function Auth({ portal = "patient" }) {
                 className="w-full bg-transparent text-sm focus:outline-none"
               />
             </Field>
+            {mode === "login" && !isDoctorPortal && (
+              <div className="text-right -mt-2">
+                <Link to="/auth/forgot" data-testid="forgot-password-link" className="text-xs text-forest underline">
+                  Forgot password?
+                </Link>
+              </div>
+            )}
             <button type="submit" disabled={submitting} data-testid="auth-submit-btn" className="btn-primary w-full justify-center py-3">
               {mode === "login" ? <LogIn className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
               {submitting ? "Please wait…"

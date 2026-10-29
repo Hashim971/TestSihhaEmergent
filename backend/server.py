@@ -7,6 +7,8 @@ import random
 import base64
 import asyncio
 import tempfile
+import hashlib
+import secrets
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -15,8 +17,10 @@ import jwt
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, ConfigurationError
+import httpx
 from pydantic import BaseModel, Field
 from cryptography.fernet import Fernet
 from typing import Optional, List, Any
@@ -37,7 +41,9 @@ from agents.patient_summary import PatientSummaryAgent
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-client = AsyncIOMotorClient(os.environ["MONGO_URL"])
+from emailer import send_email, password_reset_email
+
+client = AsyncIOMotorClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=8000)
 db = client[os.environ["DB_NAME"]]
 LLM_KEY = os.environ["EMERGENT_LLM_KEY"]
 
@@ -239,22 +245,27 @@ GOOGLE_SESSION_DAYS = 7
 
 
 class GoogleSessionIn(BaseModel):
-    session_id: str
+    session_id: str = Field(min_length=8, max_length=512)
 
 
 @api.post("/auth/google/session")
-async def google_session(body: GoogleSessionIn, response: Response):
-    """Exchanges an Emergent-managed Google session for this app's own signed-in session.
-
-    Patients only — clinicians and admins keep the password portal at /auth/clinician.
-    """
-    import requests as _requests
+async def google_session(body: GoogleSessionIn, request: Request, response: Response):
+    """Exchanges an Emergent-managed Google session for this app's own signed-in session (patients only)."""
+    identifier = f"google:{request.client.host}"
+    attempt = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
+    if attempt and attempt.get("locked_until") and datetime.fromisoformat(attempt["locked_until"]) > now_utc():
+        raise HTTPException(status_code=429, detail="Too many sign-in attempts. Try again in 15 minutes.")
     try:
-        resp = _requests.get(EMERGENT_AUTH_SESSION_URL,
-                             headers={"X-Session-ID": body.session_id}, timeout=30)
-    except Exception:
+        async with httpx.AsyncClient(timeout=20) as http:
+            resp = await http.get(EMERGENT_AUTH_SESSION_URL, headers={"X-Session-ID": body.session_id})
+    except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="Could not reach the sign-in service. Try again.")
     if resp.status_code != 200:
+        count = (attempt.get("count", 0) + 1) if attempt else 1
+        update = {"identifier": identifier, "count": count, "updated_at": iso()}
+        if count >= 10:
+            update.update(locked_until=iso(now_utc() + timedelta(minutes=15)), count=0)
+        await db.login_attempts.update_one({"identifier": identifier}, {"$set": update}, upsert=True)
         raise HTTPException(status_code=401, detail="That Google sign-in link has expired. Try again.")
     profile = resp.json()
     email = (profile.get("email") or "").strip().lower()
@@ -293,11 +304,11 @@ async def google_session(body: GoogleSessionIn, response: Response):
             "last_login_at": iso(),
         })
 
+    await db.login_attempts.delete_one({"identifier": identifier})
     await db.user_sessions.insert_one({
         "session_id": f"sess_{uuid.uuid4().hex[:12]}",
         "user_id": user_id,
         "provider": "google",
-        "session_token": profile.get("session_token"),
         "expires_at": iso(now_utc() + timedelta(days=GOOGLE_SESSION_DAYS)),
         "created_at": iso(),
     })
@@ -336,9 +347,108 @@ async def logout(response: Response):
     return {"ok": True}
 
 
+RESET_TOKEN_MINUTES = 60
+RESET_REQUESTS_PER_WINDOW = 3
+GENERIC_RESET_REPLY = {"ok": True, "message": "If an account exists for that email, a reset link is on its way."}
+
+
+class ForgotPasswordIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class ResetPasswordIn(BaseModel):
+    token: str = Field(min_length=20, max_length=200)
+    password: str = Field(min_length=6, max_length=128)
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _app_origin(request: Request) -> str:
+    origin = (request.headers.get("origin") or "").rstrip("/")
+    if origin in CORS_ORIGINS:
+        return origin
+    return next(o for o in CORS_ORIGINS if o.startswith("https://"))
+
+
+@api.post("/auth/forgot-password")
+async def forgot_password(body: ForgotPasswordIn, request: Request):
+    email = body.email.strip().lower()
+    window_start = iso(now_utc() - timedelta(minutes=15))
+    recent = await db.password_reset_tokens.count_documents({"email": email, "created_at": {"$gte": window_start}})
+    if recent >= RESET_REQUESTS_PER_WINDOW:
+        return GENERIC_RESET_REPLY
+    user = await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1, "name": 1})
+    if not user:
+        return GENERIC_RESET_REPLY
+    token = secrets.token_urlsafe(32)
+    await db.password_reset_tokens.update_many({"user_id": user["user_id"], "used_at": None},
+                                               {"$set": {"used_at": iso(), "superseded": True}})
+    await db.password_reset_tokens.insert_one({
+        "token_hash": _hash_token(token),
+        "user_id": user["user_id"],
+        "email": email,
+        "expires_at": now_utc() + timedelta(minutes=RESET_TOKEN_MINUTES),
+        "used_at": None,
+        "created_at": iso(),
+    })
+    subject, html = password_reset_email(user.get("name") or "there",
+                                         f"{_app_origin(request)}/auth/reset?token={token}")
+    try:
+        await send_email(to=email, subject=subject, html=html)
+    except HTTPException:
+        logging.getLogger(__name__).warning("Password reset email not delivered for %s", user["user_id"])
+    return GENERIC_RESET_REPLY
+
+
+@api.post("/auth/reset-password")
+async def reset_password(body: ResetPasswordIn):
+    row = await db.password_reset_tokens.find_one({"token_hash": _hash_token(body.token)}, {"_id": 0})
+    expires = row and row["expires_at"].replace(tzinfo=row["expires_at"].tzinfo or timezone.utc)
+    if not row or row.get("used_at") or expires < now_utc():
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired. Request a new one.")
+    claimed = await db.password_reset_tokens.update_one({"token_hash": row["token_hash"], "used_at": None},
+                                                        {"$set": {"used_at": iso()}})
+    if claimed.modified_count != 1:
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired. Request a new one.")
+    await db.users.update_one({"user_id": row["user_id"]},
+                              {"$set": {"password_hash": hash_password(body.password),
+                                        "auth_providers.password": True, "password_changed_at": iso()}})
+    await db.login_attempts.delete_many({"identifier": {"$regex": f":{re.escape(row['email'])}$"}})
+    return {"ok": True}
+
+
+@api.get("/health")
+async def health():
+    await client.admin.command("ping")
+    return {"ok": True}
+
+
+DB_DOWN_ERRORS = (ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, ConfigurationError)
+
+
+@app.exception_handler(ConnectionFailure)
+@app.exception_handler(ServerSelectionTimeoutError)
+@app.exception_handler(NetworkTimeout)
+async def database_unavailable(request: Request, exc: Exception):
+    logging.getLogger(__name__).error("Database unreachable: %s", exc)
+    return JSONResponse(status_code=503, content={"detail": "Service temporarily unavailable",
+                                                  "code": "service_unavailable"})
+
+
 @app.on_event("startup")
+async def startup_seed():
+    try:
+        await seed_and_index()
+    except DB_DOWN_ERRORS:
+        logging.getLogger(__name__).exception("Database unreachable at startup; serving 503s until it returns")
+
+
 async def seed_and_index():
     await db.users.create_index("email", unique=True)
+    await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
+    await db.password_reset_tokens.create_index("token_hash", unique=True)
     await db.login_attempts.create_index("identifier")
     await db.encounters.create_index([("doctor_user_id", 1), ("scheduled_at", -1)])
     await db.encounters.create_index([("patient_user_id", 1), ("scheduled_at", -1)])
@@ -1965,6 +2075,40 @@ async def init_audio_upload(encounter_id: str, mime_type: str = "audio/webm", us
     }
     await db.consultation_audio.insert_one(dict(audio))
     return audio
+
+
+LIVE_CHUNK_MAX_BYTES = 5 * 1024 * 1024
+
+
+@api.post("/encounters/{encounter_id}/audio/live")
+async def live_transcribe_chunk(encounter_id: str, offset_seconds: float = Form(0.0),
+                                window_seconds: float = Form(10.0), chunk: UploadFile = File(...),
+                                user=Depends(require_doctor)):
+    """Transcribes one ~10s slice while recording so the clinician sees lines appear. Nothing is stored."""
+    await _consented_encounter(encounter_id, user)
+    data = await chunk.read(LIVE_CHUNK_MAX_BYTES + 1)
+    if len(data) > LIVE_CHUNK_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Live audio slice is too large")
+    if len(data) < 1024:
+        return {"offset_seconds": offset_seconds, "segments": []}
+    provider = await resolved_transcription_provider()
+    suffix = AUDIO_EXTENSIONS.get((chunk.content_type or "").split(";")[0].strip(), "webm")
+    scratch = Path(tempfile.mkstemp(suffix=f".{suffix}")[1])
+    try:
+        scratch.write_bytes(data)
+        result = await get_transcriber(provider).transcribe(str(scratch), language_hint="ar-SA")
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Live transcription failed for %s", encounter_id)
+        raise HTTPException(status_code=502, detail=f"Live transcription failed: {type(exc).__name__}")
+    finally:
+        scratch.unlink(missing_ok=True)
+    segments = result.get("segments") or []
+    if provider == "stub":
+        segments = [s for s in segments if offset_seconds <= s["start"] < offset_seconds + window_seconds]
+    else:
+        segments = [{**s, "start": round(s["start"] + offset_seconds, 2), "end": round(s["end"] + offset_seconds, 2)}
+                    for s in segments]
+    return {"offset_seconds": offset_seconds, "segments": segments}
 
 
 @api.post("/audio/{audio_id}/chunk")

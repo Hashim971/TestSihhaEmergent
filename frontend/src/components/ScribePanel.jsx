@@ -9,6 +9,7 @@ const CONSENT_TEXT =
   "deleted after the retention period, and that they can decline. The patient consents.";
 
 const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+const LIVE_SLICE_MS = 10000;
 
 export function ScribePanel({ encounterId }) {
   const [state, setState] = useState(null);
@@ -23,6 +24,47 @@ export function ScribePanel({ encounterId }) {
   const saveTimer = useRef(null);
   const player = useRef(null);
   const [audioUrl, setAudioUrl] = useState("");
+  const [liveLines, setLiveLines] = useState([]);
+  const [liveStatus, setLiveStatus] = useState("");
+  const liveActive = useRef(false);
+  const liveRec = useRef(null);
+  const liveOffset = useRef(0);
+  const liveBox = useRef(null);
+
+  useEffect(() => {
+    if (liveBox.current) liveBox.current.scrollTop = liveBox.current.scrollHeight;
+  }, [liveLines]);
+
+  const sendSlice = async (blob, offset) => {
+    if (blob.size < 1024) return;
+    const form = new FormData();
+    form.append("chunk", blob, `live-${offset}.webm`);
+    form.append("offset_seconds", offset);
+    form.append("window_seconds", LIVE_SLICE_MS / 1000);
+    try {
+      const { data } = await api.post(`/encounters/${encounterId}/audio/live`, form);
+      setLiveStatus("");
+      setLiveLines((prev) => [...prev, ...data.segments].sort((a, b) => a.start - b.start));
+    } catch {
+      setLiveStatus("A few seconds couldn't be transcribed live — the full recording is still captured.");
+    }
+  };
+
+  const startSlice = (stream) => {
+    if (!liveActive.current || !stream.active) return;
+    const parts = [];
+    const offset = liveOffset.current;
+    const rec = new MediaRecorder(stream, { mimeType: "audio/webm" });
+    rec.ondataavailable = (e) => e.data.size && parts.push(e.data);
+    rec.onstop = () => {
+      liveOffset.current = offset + LIVE_SLICE_MS / 1000;
+      sendSlice(new Blob(parts, { type: "audio/webm" }), offset);
+      startSlice(stream);
+    };
+    rec.start();
+    liveRec.current = rec;
+    setTimeout(() => rec.state === "recording" && rec.stop(), LIVE_SLICE_MS);
+  };
 
   const load = () => api.get(`/encounters/${encounterId}/soap`).then(({ data }) => {
     setState(data);
@@ -30,7 +72,7 @@ export function ScribePanel({ encounterId }) {
     if (data.note) setDraft(data.note.edited_content || data.note.content);
   }).catch(() => {});
 
-  useEffect(() => { load(); return () => clearInterval(timer.current); }, [encounterId]);
+  useEffect(() => { load(); return () => { clearInterval(timer.current); liveActive.current = false; }; }, [encounterId]);
 
   if (!state) return null;
   const note = state.note;
@@ -58,6 +100,11 @@ export function ScribePanel({ encounterId }) {
       rec.onstop = () => stream.getTracks().forEach((t) => t.stop());
       rec.start(5000);
       recorder.current = rec;
+      setLiveLines([]);
+      setLiveStatus("");
+      liveOffset.current = 0;
+      liveActive.current = true;
+      startSlice(stream);
       setRecording(true);
       setElapsed(0);
       timer.current = setInterval(() => setElapsed((s) => s + 1), 1000);
@@ -70,6 +117,8 @@ export function ScribePanel({ encounterId }) {
     clearInterval(timer.current);
     const rec = recorder.current;
     if (!rec) return;
+    liveActive.current = false;
+    if (liveRec.current?.state === "recording") liveRec.current.stop();
     await new Promise((res) => { rec.addEventListener("stop", res, { once: true }); rec.stop(); });
     setRecording(false);
     setBusy("Uploading the recording…");
@@ -188,6 +237,26 @@ export function ScribePanel({ encounterId }) {
           {state.audio?.deleted_at && (
             <span className="text-xs text-ink-soft" data-testid="audio-purged">Audio deleted after retention</span>
           )}
+        </div>
+      )}
+
+      {(recording || (busy && liveLines.length > 0)) && (
+        <div className="mt-4 border border-line rounded-xl bg-sand/60" data-testid="live-transcript">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-line">
+            <span className="text-[10px] uppercase tracking-[0.15em] text-ink-soft font-semibold">Live transcript</span>
+            <span className="text-[10px] text-ink-soft">updates every ~10 seconds</span>
+          </div>
+          <div ref={liveBox} dir="auto" className="max-h-56 overflow-y-auto px-4 py-3 space-y-2">
+            {liveLines.length === 0 ? (
+              <p className="text-xs text-ink-soft" data-testid="live-transcript-waiting">Listening… the first lines appear in a few seconds.</p>
+            ) : liveLines.map((l, i) => (
+              <div key={`${l.start}-${i}`} className="flex gap-3 fade-up" data-testid={`live-line-${i}`}>
+                <span className="text-[10px] text-ink-soft tabular-nums pt-1 shrink-0">{fmt(Math.floor(l.start))}</span>
+                <p dir="auto" className={`text-sm leading-relaxed ${l.confidence < 0.65 ? "text-terracotta" : ""}`}>{l.text}</p>
+              </div>
+            ))}
+          </div>
+          {liveStatus && <p className="px-4 pb-3 text-[11px] text-terracotta" data-testid="live-transcript-status">{liveStatus}</p>}
         </div>
       )}
 

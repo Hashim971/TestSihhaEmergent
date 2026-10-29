@@ -36,3 +36,10 @@ All accounts use standard email/password JWT auth (httpOnly cookies).
   in Settings or the admin assigns one at `/admin/assignments`.
 - `admin@sihha.ai` is the only `is_admin` account (matched on `ADMIN_EMAIL` in backend/.env) and sees every
   patient regardless of assignment. All 11 existing patients are currently assigned to `dr.layla@sihha.ai`.
+
+## Password reset / Google sign-in (added Jun 2026)
+- `delivered+sihha-reset@resend.dev` / `NewPass1` — patient created to test forgot-password (Resend test inbox accepts mail).
+- Forgot password: `/auth/forgot` → POST `/api/auth/forgot-password` (always generic reply). Reset page `/auth/reset?token=…` → POST `/api/auth/reset-password`.
+  Tokens are stored only as sha256 hashes in `password_reset_tokens`; to test a reset, insert a row with a known raw token (see `/app/scripts/phase_b_probe.py`).
+  Seeded `@sihha.ai` addresses are undeliverable — the send fails silently (logged) and the reply stays generic.
+- Google sign-in: patient page only (`google-signin-btn`). Backend POST `/api/auth/google/session {session_id}`; clinician emails get 403.
