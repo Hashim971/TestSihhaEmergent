@@ -139,15 +139,32 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(user_id: str, email: str) -> str:
-    payload = {"sub": user_id, "email": email, "type": "access",
-               "exp": datetime.now(timezone.utc) + timedelta(minutes=15)}
+    now = datetime.now(timezone.utc)
+    payload = {"sub": user_id, "email": email, "type": "access", "iat": now,
+               "exp": now + timedelta(minutes=15)}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 def create_refresh_token(user_id: str) -> str:
-    payload = {"sub": user_id, "type": "refresh",
-               "exp": datetime.now(timezone.utc) + timedelta(days=7)}
+    now = datetime.now(timezone.utc)
+    payload = {"sub": user_id, "type": "refresh", "iat": now,
+               "exp": now + timedelta(days=7)}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def client_ip(request: Request) -> str:
+    for header in ("cf-connecting-ip", "x-real-ip"):
+        if request.headers.get(header):
+            return request.headers[header].strip()
+    forwarded = request.headers.get("x-forwarded-for")
+    return forwarded.split(",")[0].strip() if forwarded else request.client.host
+
+
+def token_predates_password_change(payload: dict, user: dict) -> bool:
+    changed = user.get("password_changed_at")
+    if not changed:
+        return False
+    return payload.get("iat", 0) < int(datetime.fromisoformat(changed).timestamp())
 
 
 def set_auth_cookies(response: Response, access: str, refresh: str):
@@ -174,7 +191,7 @@ async def get_current_user(request: Request):
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid token type")
     user = await db.users.find_one({"user_id": payload["sub"]}, USER_PROJECTION)
-    if not user:
+    if not user or token_predates_password_change(payload, user):
         raise HTTPException(status_code=401, detail="User not found")
     return with_capabilities(user)
 
@@ -220,7 +237,7 @@ async def register(body: RegisterRequest, response: Response):
 @api.post("/auth/login")
 async def login(body: LoginRequest, request: Request, response: Response):
     email = body.email.strip().lower()
-    identifier = f"{request.client.host}:{email}"
+    identifier = f"{client_ip(request)}:{email}"
     attempt = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
     if attempt and attempt.get("locked_until"):
         locked_until = datetime.fromisoformat(attempt["locked_until"])
@@ -251,7 +268,7 @@ class GoogleSessionIn(BaseModel):
 @api.post("/auth/google/session")
 async def google_session(body: GoogleSessionIn, request: Request, response: Response):
     """Exchanges an Emergent-managed Google session for this app's own signed-in session (patients only)."""
-    identifier = f"google:{request.client.host}"
+    identifier = f"google:{client_ip(request)}"
     attempt = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
     if attempt and attempt.get("locked_until") and datetime.fromisoformat(attempt["locked_until"]) > now_utc():
         raise HTTPException(status_code=429, detail="Too many sign-in attempts. Try again in 15 minutes.")
@@ -328,7 +345,7 @@ async def refresh_token(request: Request, response: Response):
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid token type")
     user = await db.users.find_one({"user_id": payload["sub"]}, USER_PROJECTION)
-    if not user:
+    if not user or token_predates_password_change(payload, user):
         raise HTTPException(status_code=401, detail="User not found")
     response.set_cookie("access_token", create_access_token(user["user_id"], user["email"]),
                         httponly=True, secure=True, samesite="lax", max_age=900, path="/")
@@ -349,6 +366,8 @@ async def logout(response: Response):
 
 RESET_TOKEN_MINUTES = 60
 RESET_REQUESTS_PER_WINDOW = 3
+RESET_REQUESTS_PER_IP = 10
+_background_tasks = set()
 GENERIC_RESET_REPLY = {"ok": True, "message": "If an account exists for that email, a reset link is on its way."}
 
 
@@ -372,10 +391,26 @@ def _app_origin(request: Request) -> str:
     return next(o for o in CORS_ORIGINS if o.startswith("https://"))
 
 
+async def _deliver_reset_email(user_id: str, email: str, subject: str, html: str):
+    try:
+        await send_email(to=email, subject=subject, html=html)
+    except Exception:
+        logging.getLogger(__name__).warning("Password reset email not delivered for %s", user_id)
+
+
 @api.post("/auth/forgot-password")
 async def forgot_password(body: ForgotPasswordIn, request: Request):
     email = body.email.strip().lower()
+    ip_key = f"reset:{client_ip(request)}"
     window_start = iso(now_utc() - timedelta(minutes=15))
+    ip_row = await db.login_attempts.find_one({"identifier": ip_key}, {"_id": 0})
+    if ip_row and ip_row.get("window_start", "") >= window_start and ip_row.get("count", 0) >= RESET_REQUESTS_PER_IP:
+        return GENERIC_RESET_REPLY
+    if ip_row and ip_row.get("window_start", "") >= window_start:
+        await db.login_attempts.update_one({"identifier": ip_key}, {"$inc": {"count": 1}})
+    else:
+        await db.login_attempts.update_one({"identifier": ip_key},
+                                           {"$set": {"window_start": iso(), "count": 1}}, upsert=True)
     recent = await db.password_reset_tokens.count_documents({"email": email, "created_at": {"$gte": window_start}})
     if recent >= RESET_REQUESTS_PER_WINDOW:
         return GENERIC_RESET_REPLY
@@ -395,10 +430,9 @@ async def forgot_password(body: ForgotPasswordIn, request: Request):
     })
     subject, html = password_reset_email(user.get("name") or "there",
                                          f"{_app_origin(request)}/auth/reset?token={token}")
-    try:
-        await send_email(to=email, subject=subject, html=html)
-    except HTTPException:
-        logging.getLogger(__name__).warning("Password reset email not delivered for %s", user["user_id"])
+    task = asyncio.create_task(_deliver_reset_email(user["user_id"], email, subject, html))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return GENERIC_RESET_REPLY
 
 
@@ -431,6 +465,7 @@ DB_DOWN_ERRORS = (ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout
 @app.exception_handler(ConnectionFailure)
 @app.exception_handler(ServerSelectionTimeoutError)
 @app.exception_handler(NetworkTimeout)
+@app.exception_handler(ConfigurationError)
 async def database_unavailable(request: Request, exc: Exception):
     logging.getLogger(__name__).error("Database unreachable: %s", exc)
     return JSONResponse(status_code=503, content={"detail": "Service temporarily unavailable",

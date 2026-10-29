@@ -1,0 +1,49 @@
+{
+  "summary": "Tested the 4 requested items end-to-end (backend pytest 16 tests + Playwright UI). Forgot/reset password, live transcript (stub UI + 1 real hosted Whisper call), DB-down overlay and Google sign-in surroundings all work. 15/16 backend tests pass. Found 2 security issues: (1) the Google sign-in rate limit is keyed on the ingress proxy IP, not the real client, so the 10-attempt lockout is spread across proxy pods and one attacker can lock Google sign-in for everyone behind the same proxy IP; (2) forgot-password response time reveals whether an account exists (0.65s for unknown emails vs ~8s for real accounts, because the email is sent before replying).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/auth/google/session", "issue": "Rate limit identifier = f'google:{request.client.host}', but client.host is the ingress proxy IP (seen 10.79.138.2 and 10.79.138.5 alternating). 12 bad attempts gave no 429 because counts are split across proxy IPs. Worse, all real users share these proxy IPs, so one attacker can trigger a 15-minute Google sign-in lockout for every user. uvicorn runs without --proxy-headers and no X-Forwarded-For handling exists. Same root cause affects the /auth/login identifier (proxyIP:email): the lock is still per email, so less harm.", "priority": "HIGH"},
+      {"endpoint": "POST /api/auth/forgot-password", "issue": "Timing side-channel allows account enumeration: the email is sent inline before replying. Unknown email ~0.65s, existing account (noura.patient@sihha.ai) ~8.3s. The body is generic, but the delay gives it away.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/auth/forgot-password", "issue": "Throttle is per email only. There is no per-IP throttle, so an attacker can send reset emails to many different addresses from one IP (costs email credits)."},
+      {"endpoint": "POST /api/auth/forgot-password", "issue": "send_email raises ValueError if the template safety check fails. Only HTTPException is caught, so that case would return 500. Very unlikely with the fixed template."},
+      {"endpoint": "POST /api/auth/reset-password", "issue": "Existing JWT sessions (refresh tokens valid 7 days) are not invalidated after a password reset, so a stolen session survives the reset. Consider storing password_changed_at and rejecting tokens issued before it."},
+      {"endpoint": "exception handlers", "issue": "ConfigurationError is in DB_DOWN_ERRORS (used at startup), but no @app.exception_handler is registered for it. All other pymongo handlers return 503 {code:'service_unavailable'} correctly."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_checks": [
+    "GET /api/health -> {ok:true}",
+    "forgot-password: generic 200 for existing, non-existing and undeliverable (@sihha.ai) emails. The 4th request in 15 min stores no token (3 rows). Older tokens get used_at + superseded. Only the sha256 token_hash is stored (64 hex chars).",
+    "reset-password: invalid token 400, expired token 400, reused token 400, short password 422. After a valid reset the old password gets 401 and the new one 200. Login cookies are httpOnly + secure.",
+    "google/session: 3-char id 422, fake id 401. Code review: clinician role gets 403, no Google session_token is stored, cookies are httpOnly+secure, and the response uses USER_PROJECTION (no password_hash)",
+    "Secrets: no sk-emergent, ek_ key, JWT_SECRET or mongodb+srv found in the frontend JS bundle. /auth/me and login responses have no password_hash or _id.",
+    "live audio: chunk under 1KB returns empty segments. Stub returns only segments inside [offset, offset+10). A patient gets 403. Real hosted Whisper call (TTS Arabic mp3, offset 20) returned start 20.0 / end 24.0 with the correct Arabic text.",
+    "UI /auth: forgot-password-link is visible; it is absent on /auth/clinician, as is the Google button. The forgot flow reaches forgot-sent. Reset with a bad token shows 'invalid or has expired'. No token disables the submit button and shows an error. Mismatched passwords show auth-error. A valid token reaches reset-done, the token is removed from the URL, and the new password works.",
+    "UI Google: google-signin-btn redirects to https://auth.emergentagent.com/?redirect=<origin>/dashboard. /dashboard#session_id=fakeid shows auth-callback, then /auth with a toast 'That Google sign-in link has expired'.",
+    "UI overlay: appears for 502 HTML, aborted network requests and 503 service_unavailable JSON. A failed retry keeps it; a successful retry reloads with no overlay. It does not appear for a normal omar.patient session or for an app-level 4xx page.",
+    "UI live transcript (stub, synthetic WebAudio mic): live-transcript-waiting appears, then POST /audio/live at ~10s and 20s. live-line-0..5 rendered with timestamps 00:00..00:29. Stop leads to audio/init, chunk, complete, and a new SOAP draft was created."
+  ],
+  "test_report_links": ["/app/backend/tests/test_auth_reset_google_live.py", "/app/test_reports/pytest/pytest_results_iter13.xml"],
+  "action_items": [
+    "Use the real client IP for rate limiting: run uvicorn with --proxy-headers --forwarded-allow-ips='*' or read the first X-Forwarded-For hop, in google_session and login. Re-run TestZGoogleLockout.",
+    "Make forgot-password reply time constant: send the email in a FastAPI BackgroundTasks or asyncio.create_task, so existing and non-existing emails respond equally fast.",
+    "Optional: per-IP throttle on forgot-password; invalidate sessions after reset; catch ValueError around send_email."
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~3500 lines and should be split into routers (auth, scribe, pharmacy, admin).",
+    "The consent endpoint lets the doctor record patient consent themselves (granted_by = doctor). This was already the case and may be intended (verbal consent), but it is worth an audit note."
+  ],
+  "updated_files": ["/app/backend/tests/test_auth_reset_google_live.py", "/app/scripts/make_reset_token.py"],
+  "success_rate": {"backend": "94% (15/16)", "frontend": "100%"},
+  "seed_data_creation": "Temporary test_reset_*@example.com users are created and deleted by the fixture. The delivered+sihha-reset@resend.dev password was changed to NewPass2 during the UI test, then reset back to NewPass1 (login verified 200). One new SOAP draft was created on enc_773ddb4169b4 by the live-recording UI test. The transcription provider was restored to 'hosted' (verified). google:* login_attempts rows were cleared.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run pytest /app/backend/tests/test_auth_reset_google_live.py. TestZGoogleLockout fails until real-client-IP rate limiting is fixed; it clears google:* rows afterwards. TestLive switches the provider to stub and restores it. /app/scripts/make_reset_token.py prints a valid raw reset token for delivered+sihha-reset@resend.dev. The browser tool has no fake-media flags, so to test the mic, override navigator.mediaDevices.getUserMedia via add_init_script with a WebAudio oscillator stream.",
+  "rca of the issue": "Google lockout: request.client.host behind the Kubernetes ingress is the proxy pod IP (several replicas). Without proxy-headers, the identifier is shared by all users and split across replicas. Reproduce: 12 fake session_ids give all 401s, and db.login_attempts shows google:10.79.138.2 count 7 and google:10.79.138.5 count 5. Enumeration: forgot_password awaits send_email (~8s round trip) only when the user exists."
+}
