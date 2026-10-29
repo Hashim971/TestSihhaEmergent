@@ -142,7 +142,8 @@ class TestScribePipeline:
         assert audio["transcription_status"] == "complete"
         assert audio["transcript"]["segments"] and audio["consent_recorded_at"]
         assert audio["retention_expires_at"] > audio["created_at"]
-        assert Path(audio["storage_path"]).exists()
+        assert audio["storage_backend"] == "object"
+        assert audio["storage_path"].startswith("sihha-ai/consultation-audio/")
         assert audio["size_bytes"] > 0
 
     def test_agent_run_holds_no_audio_bytes(self, note, db):

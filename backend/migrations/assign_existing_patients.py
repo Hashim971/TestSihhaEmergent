@@ -17,7 +17,7 @@ db = MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
 DEFAULT_DOCTOR_EMAIL = os.environ.get("DEFAULT_ASSIGNED_DOCTOR_EMAIL", "dr.layla@sihha.ai")
 doctor = db.users.find_one({"email": DEFAULT_DOCTOR_EMAIL, "role": "doctor"}, {"_id": 0, "user_id": 1, "name": 1})
 if not doctor:
-    raise SystemExit(f"doctor {DEFAULT_ASSIGNED_DOCTOR_EMAIL} not found")
+    raise SystemExit(f"doctor {DEFAULT_DOCTOR_EMAIL} not found")
 
 res = db.users.update_many(
     {"role": "patient", "assigned_doctor_user_id": {"$in": [None, ""]}},

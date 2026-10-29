@@ -16,6 +16,12 @@ function formatApiErrorDetail(detail) {
 export default function Auth({ portal = "patient" }) {
   const { user, loading, setUser } = useAuth();
   const [mode, setMode] = useState("login");
+
+  // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+  const googleSignIn = () => {
+    const redirectUrl = window.location.origin + "/dashboard";
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  };
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [error, setError] = useState(null);
   const [requested, setRequested] = useState(false);
@@ -130,6 +136,26 @@ export default function Auth({ portal = "patient" }) {
           {error && (
             <div className="mb-4 border border-terracotta/40 bg-terracotta/5 text-terracotta text-sm rounded-xl px-4 py-3" data-testid="auth-error">
               {error}
+            </div>
+          )}
+
+          {!isDoctorPortal && (
+            <div className="mb-5">
+              <button type="button" onClick={googleSignIn} data-testid="google-signin-btn"
+                className="w-full flex items-center justify-center gap-3 border border-line rounded-full py-3 text-sm font-semibold hover:bg-sand transition-colors">
+                <svg className="h-4 w-4" viewBox="0 0 48 48" aria-hidden="true">
+                  <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.5l6.8-6.8C35.6 2.4 30.2 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.2C12.4 13.3 17.7 9.5 24 9.5z" />
+                  <path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-2.8-.4-4.1H24v8.2h12.6c-.3 2.1-1.6 5.2-4.6 7.3l7.7 6c4.5-4.2 6.4-10.2 6.4-17.4z" />
+                  <path fill="#FBBC05" d="M10.5 28.6A14.5 14.5 0 0 1 9.7 24c0-1.6.3-3.2.8-4.6l-7.9-6.2A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l7.9-6.2z" />
+                  <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.7-5.9l-7.7-6c-2.1 1.4-4.8 2.4-8 2.4-6.3 0-11.6-3.8-13.5-9.1l-7.9 6.2C6.5 42.6 14.6 48 24 48z" />
+                </svg>
+                Continue with Google
+              </button>
+              <div className="flex items-center gap-3 mt-5">
+                <span className="h-px flex-1 bg-line" />
+                <span className="text-[10px] uppercase tracking-[0.2em] text-ink-soft">or use email</span>
+                <span className="h-px flex-1 bg-line" />
+              </div>
             </div>
           )}
 

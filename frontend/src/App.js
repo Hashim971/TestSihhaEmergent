@@ -1,5 +1,5 @@
 import React from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider } from "./context/AuthContext";
 import Landing from "./pages/Landing";
@@ -24,11 +24,25 @@ import AdminAssignments from "./pages/AdminAssignments";
 import Intake from "./pages/Intake";
 import EncounterDetail from "./pages/EncounterDetail";
 import Settings from "./pages/Settings";
+import AuthCallback from "./pages/AuthCallback";
 
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <AppRouter />
+        <Toaster position="top-right" richColors />
+      </AuthProvider>
+    </BrowserRouter>
+  );
+}
+
+function AppRouter() {
+  const location = useLocation();
+  // Process a fresh Google session before anything else tries to check /auth/me.
+  if (location.hash?.includes("session_id=")) return <AuthCallback />;
+  return (
+    <>
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/auth" element={<Auth />} />
@@ -54,8 +68,6 @@ export default function App() {
             <Route path="/settings" element={<Settings />} />
           </Route>
         </Routes>
-        <Toaster position="top-right" richColors />
-      </AuthProvider>
-    </BrowserRouter>
+    </>
   );
 }

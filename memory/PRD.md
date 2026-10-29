@@ -332,3 +332,9 @@ Answers "does this screening need a visit, and how does it get booked?" plus e-p
 - P1: Doctor-patient explicit assignment (currently: all sharing patients visible to any doctor)
 - P2: Voice input, body-map symptom input, notification email/SMS, counterfeit pill detection, real wearable integrations
 - P2: Report list page for patients (reports currently downloadable from chat; API /api/reports exists)
+
+## 2026-06 — Transcription outage fix
+- Root cause: MongoDB Atlas cluster (cluster0.ntwaj1g) was unreachable (DNS gone), so the backend failed to boot and every route, including scribe transcription, returned 502. User brought the cluster back; backend restarted.
+- Verified live Emergent-managed speech-to-text (OpenAI `whisper-1` via EMERGENT_LLM_KEY, `agents/transcription/hosted.py`) end-to-end with real Arabic audio: upload → transcript (status complete, arabic, confidence 0.756, 2 segments) → SOAP note generated.
+- Probe script: `/app/scripts/live_stt_e2e.py`.
+- Still pending: real Google OAuth roundtrip verification; Week View, Vitals Trend Warnings, Pharmacist Inbox, Ad Console, Forgot password.

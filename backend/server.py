@@ -234,6 +234,77 @@ async def login(body: LoginRequest, request: Request, response: Response):
     return with_capabilities(await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION))
 
 
+EMERGENT_AUTH_SESSION_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+GOOGLE_SESSION_DAYS = 7
+
+
+class GoogleSessionIn(BaseModel):
+    session_id: str
+
+
+@api.post("/auth/google/session")
+async def google_session(body: GoogleSessionIn, response: Response):
+    """Exchanges an Emergent-managed Google session for this app's own signed-in session.
+
+    Patients only — clinicians and admins keep the password portal at /auth/clinician.
+    """
+    import requests as _requests
+    try:
+        resp = _requests.get(EMERGENT_AUTH_SESSION_URL,
+                             headers={"X-Session-ID": body.session_id}, timeout=30)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not reach the sign-in service. Try again.")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="That Google sign-in link has expired. Try again.")
+    profile = resp.json()
+    email = (profile.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="Google did not return an email address")
+
+    user = await db.users.find_one({"email": email})
+    if user:
+        if user.get("role") not in (None, "patient"):
+            raise HTTPException(status_code=403,
+                                detail="Clinician accounts sign in through the clinician portal")
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {"$set": {"google_id": profile.get("id"), "auth_providers.google": True,
+                      "picture": user.get("picture") or profile.get("picture"),
+                      "name": user.get("name") or profile.get("name") or email.split("@")[0],
+                      "last_login_at": iso()}},
+        )
+        user_id = user["user_id"]
+    else:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        await db.users.insert_one({
+            "user_id": user_id,
+            "email": email,
+            "name": profile.get("name") or email.split("@")[0],
+            "password_hash": None,
+            "google_id": profile.get("id"),
+            "auth_providers": {"google": True},
+            "picture": profile.get("picture"),
+            "role": "patient",
+            "clinician_requested": False,
+            "sharing_enabled": True,
+            "assigned_doctor_user_id": None,
+            "onboarding_completed": False,
+            "created_at": iso(),
+            "last_login_at": iso(),
+        })
+
+    await db.user_sessions.insert_one({
+        "session_id": f"sess_{uuid.uuid4().hex[:12]}",
+        "user_id": user_id,
+        "provider": "google",
+        "session_token": profile.get("session_token"),
+        "expires_at": iso(now_utc() + timedelta(days=GOOGLE_SESSION_DAYS)),
+        "created_at": iso(),
+    })
+    set_auth_cookies(response, create_access_token(user_id, email), create_refresh_token(user_id))
+    return with_capabilities(await db.users.find_one({"user_id": user_id}, USER_PROJECTION))
+
+
 @api.post("/auth/refresh")
 async def refresh_token(request: Request, response: Response):
     token = request.cookies.get("refresh_token")
@@ -1808,8 +1879,7 @@ async def doctor_dashboard(user=Depends(require_doctor)):
 
 # ---------- Clinical Scribe: consent, audio, SOAP notes ----------
 SCRIBE_AGENT = ScribeAgent()
-AUDIO_DIR = Path(os.environ.get("AUDIO_STORAGE_DIR", "/app/backend/uploads/audio"))
-AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+AUDIO_OBJECT_PREFIX = "consultation-audio"
 AUDIO_RETENTION_DAYS = int(os.environ.get("AUDIO_RETENTION_DAYS", "30"))
 _fernet = Fernet(os.environ["AUDIO_ENCRYPTION_KEY"].encode())
 PATIENT_SUMMARY_AGENT = PatientSummaryAgent()
@@ -1904,13 +1974,16 @@ async def upload_audio_chunk(audio_id: str, index: int = Form(...), chunk: Uploa
     if not audio:
         raise HTTPException(status_code=404, detail="Upload not found")
     await _consented_encounter(audio["encounter_id"], user)
-    part = AUDIO_DIR / f"{audio_id}.part"
+    part = f"{STORAGE_APP}/{AUDIO_OBJECT_PREFIX}/{audio_id}/part-{index:04d}"
     data = await chunk.read()
-    with open(part, "ab") as fh:
-        fh.write(data)
-    os.chmod(part, 0o600)
+    try:
+        put_object(part, data, "application/octet-stream")
+    except Exception:
+        logging.getLogger(__name__).exception("Audio chunk upload failed for %s", audio_id)
+        raise HTTPException(status_code=502, detail="Could not store that part of the recording")
     await db.consultation_audio.update_one({"audio_id": audio_id},
-                                           {"$inc": {"size_bytes": len(data)}})
+                                           {"$inc": {"size_bytes": len(data)},
+                                            "$addToSet": {"chunk_paths": part}})
     return {"audio_id": audio_id, "index": index, "received_bytes": len(data)}
 
 
@@ -1920,32 +1993,36 @@ async def complete_audio_upload(audio_id: str, duration_seconds: float = Form(0.
     if not audio:
         raise HTTPException(status_code=404, detail="Upload not found")
     enc = await _consented_encounter(audio["encounter_id"], user)
-    part = AUDIO_DIR / f"{audio_id}.part"
-    if not part.exists():
+    parts = sorted(audio.get("chunk_paths") or [])
+    if not parts:
         raise HTTPException(status_code=400, detail="No audio was uploaded")
 
-    encrypted = AUDIO_DIR / f"{audio_id}.enc"
-    encrypted.write_bytes(_fernet.encrypt(part.read_bytes()))
-    os.chmod(encrypted, 0o600)
-    part.unlink()
+    raw = b"".join(get_object(path)[0] for path in parts)
+    try:
+        stored = put_object(f"{STORAGE_APP}/{AUDIO_OBJECT_PREFIX}/{audio_id}.enc",
+                            _fernet.encrypt(raw), "application/octet-stream")
+    except Exception:
+        logging.getLogger(__name__).exception("Audio upload to object storage failed for %s", audio_id)
+        raise HTTPException(status_code=502, detail="Could not store the recording. Try again.")
     await db.consultation_audio.update_one(
         {"audio_id": audio_id},
-        {"$set": {"storage_path": str(encrypted), "duration_seconds": duration_seconds,
-                  "transcription_status": "processing"}},
+        {"$set": {"storage_path": stored["path"], "storage_backend": "object",
+                  "duration_seconds": duration_seconds, "transcription_status": "processing"}},
     )
 
-    plain = AUDIO_DIR / f"{audio_id}.{AUDIO_EXTENSIONS.get(audio.get('mime_type'), 'webm')}"
+    suffix = AUDIO_EXTENSIONS.get(audio.get("mime_type"), "webm")
+    scratch = Path(tempfile.mkstemp(suffix=f".{suffix}")[1])
     try:
-        plain.write_bytes(_fernet.decrypt(encrypted.read_bytes()))
+        scratch.write_bytes(raw)
         provider = await resolved_transcription_provider()
-        transcript = await get_transcriber(provider).transcribe(str(plain), language_hint="ar-SA")
+        transcript = await get_transcriber(provider).transcribe(str(scratch), language_hint="ar-SA")
     except Exception as exc:
         await db.consultation_audio.update_one({"audio_id": audio_id},
                                                {"$set": {"transcription_status": "failed"}})
         logging.getLogger(__name__).exception("Transcription failed for %s", audio_id)
         raise HTTPException(status_code=502, detail=f"Transcription failed: {type(exc).__name__}")
     finally:
-        plain.unlink(missing_ok=True)
+        scratch.unlink(missing_ok=True)
 
     await db.consultation_audio.update_one(
         {"audio_id": audio_id},
@@ -2131,9 +2208,14 @@ async def stream_audio(audio_id: str, user=Depends(require_doctor)):
     if not audio:
         raise HTTPException(status_code=404, detail="Recording not found")
     await _consented_encounter(audio["encounter_id"], user)
-    if not audio.get("storage_path") or not Path(audio["storage_path"]).exists():
+    if not audio.get("storage_path"):
         raise HTTPException(status_code=410, detail="This recording has passed its retention period")
-    data = _fernet.decrypt(Path(audio["storage_path"]).read_bytes())
+    if audio.get("storage_backend") == "object":
+        data = _fernet.decrypt(get_object(audio["storage_path"])[0])
+    else:
+        if not Path(audio["storage_path"]).exists():
+            raise HTTPException(status_code=410, detail="This recording is no longer available")
+        data = _fernet.decrypt(Path(audio["storage_path"]).read_bytes())
     return Response(content=data, media_type=audio.get("mime_type") or "audio/webm",
                     headers={"Cache-Control": "no-store"})
 
@@ -2164,11 +2246,16 @@ async def purge_expired_audio():
     purged = 0
     for audio in due:
         path = audio.get("storage_path")
-        if path:
+        if path and audio.get("storage_backend") == "object":
+            delete_object(path)
+        elif path:
             Path(path).unlink(missing_ok=True)
+        for part in audio.get("chunk_paths") or []:
+            delete_object(part)
         await db.consultation_audio.update_one(
             {"audio_id": audio["audio_id"]},
-            {"$set": {"storage_path": None, "transcript": None, "deleted_at": iso()}},
+            {"$set": {"storage_path": None, "transcript": None, "chunk_paths": [],
+                      "deleted_at": iso()}},
         )
         purged += 1
     return {"purged": purged, "checked": len(due)}
@@ -2229,6 +2316,17 @@ def get_object(path: str):
             continue
         resp.raise_for_status()
         return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+
+def delete_object(path: str) -> bool:
+    """Best effort — retention must still mark the row purged even if the object is already gone."""
+    try:
+        resp = requests.delete(f"{STORAGE_URL}/objects/{path}",
+                               headers={"X-Storage-Key": init_storage()}, timeout=60)
+        return resp.status_code < 400
+    except Exception:
+        logging.getLogger(__name__).warning("Could not delete object %s", path)
+        return False
 
 
 PHARMACY_PUBLIC_FIELDS = ("pharmacy_id", "name_en", "name_ar", "sfda_license", "moh_license",
@@ -3041,7 +3139,8 @@ async def _load_rx_for_doctor(prescription_id: str, doctor):
 
 
 @api.post("/encounters/{encounter_id}/prescription")
-async def create_prescription(encounter_id: str, body: PrescriptionIn, user=Depends(require_doctor)):
+async def create_encounter_prescription(encounter_id: str, body: PrescriptionIn,
+                                       user=Depends(require_doctor)):
     enc = await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
     if not enc or enc["doctor_user_id"] != user["user_id"]:
         raise HTTPException(status_code=404, detail="Encounter not found")
