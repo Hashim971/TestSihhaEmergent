@@ -18,9 +18,10 @@ export default function Users() {
 
   useEffect(() => {
     setLoading(true);
+    let live = true;
     const t = setTimeout(() => api.get("/admin/users", { params: { ...filters, page, limit: LIMIT } })
-      .then(({ data }) => setData(data)).catch(() => {}).finally(() => setLoading(false)), 250);
-    return () => clearTimeout(t);
+      .then(({ data }) => live && setData(data)).catch(() => {}).finally(() => live && setLoading(false)), 250);
+    return () => { live = false; clearTimeout(t); };
   }, [filters, page, tick]);
 
   const setFilter = (k, v) => { setPage(1); setFilters((f) => ({ ...f, [k]: v })); };

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { X, Ban, RotateCcw, FlaskConical } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../../lib/api";
@@ -36,7 +37,7 @@ export function UserDetailModal({ userId, onClose, onChanged }) {
     }
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 bg-ink/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
       <div className="card w-full max-w-lg p-5 sm:p-6 fade-up max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()} data-testid="user-detail-modal">
         <div className="flex items-start justify-between gap-3 mb-4">
@@ -58,7 +59,7 @@ export function UserDetailModal({ userId, onClose, onChanged }) {
               <Info label="Joined" value={u.created_at ? new Date(u.created_at).toLocaleDateString() : "—"} />
               <Info label="Last sign-in" value={ago(u.last_login_at)} testid="user-detail-last-login" />
               <Info label="Last active" value={ago(u.last_seen_at)} />
-              <Info label="Sign-in method" value={u.auth_provider === "google" ? "Google" : "Email & password"} />
+              <Info label="Sign-in method" value={u.sign_in_method} testid="user-detail-sign-in-method" />
             </dl>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="user-detail-activity">
               {STATS.map(([k, label]) => (
@@ -96,7 +97,8 @@ export function UserDetailModal({ userId, onClose, onChanged }) {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

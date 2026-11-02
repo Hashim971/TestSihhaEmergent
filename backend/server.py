@@ -229,6 +229,8 @@ async def register(body: RegisterRequest, response: Response):
         "onboarding_completed": False,
         "account_id": tenant["account_id"] if tenant else None,
         "created_at": iso(),
+        "last_login_at": iso(),
+        "last_seen_at": iso(),
     })
     set_auth_cookies(response, create_access_token(user_id, email), create_refresh_token(user_id))
     return with_capabilities(await db.users.find_one({"user_id": user_id}, USER_PROJECTION))
@@ -303,6 +305,8 @@ async def google_session(body: GoogleSessionIn, request: Request, response: Resp
         if user.get("role") not in (None, "patient"):
             raise HTTPException(status_code=403,
                                 detail="Clinician accounts sign in through the clinician portal")
+        if user.get("suspended"):
+            raise HTTPException(status_code=403, detail=SUSPENDED_MSG)
         await db.users.update_one(
             {"user_id": user["user_id"]},
             {"$set": {"google_id": profile.get("id"), "auth_providers.google": True,
@@ -5567,7 +5571,7 @@ async def platform_stats(admin=Depends(require_admin)):
 # ---------- Super admin: users ----------
 ADMIN_USER_FIELDS = {"_id": 0, "user_id": 1, "email": 1, "name": 1, "role": 1, "account_id": 1, "account_role": 1,
                      "created_at": 1, "last_login_at": 1, "last_seen_at": 1, "suspended": 1, "suspended_at": 1,
-                     "suspended_reason": 1, "is_demo": 1, "auth_provider": 1, "picture": 1, "phone": 1}
+                     "suspended_reason": 1, "is_demo": 1, "auth_providers": 1, "password_hash": 1, "picture": 1, "phone": 1}
 
 
 async def _with_account_names(users: list) -> list:
@@ -5575,6 +5579,9 @@ async def _with_account_names(users: list) -> list:
     names = {a["account_id"]: a["name"] for a in await db.accounts.find(
         {"account_id": {"$in": ids}}, {"_id": 0, "account_id": 1, "name": 1}).to_list(len(ids) or 1)}
     for u in users:
+        google = bool((u.pop("auth_providers", None) or {}).get("google"))
+        password = bool(u.pop("password_hash", None))
+        u["sign_in_method"] = " + ".join([m for m, on in (("Email & password", password), ("Google", google)) if on]) or "—"
         u["account_name"] = names.get(u.get("account_id"))
         u["is_demo"] = is_demo_user(u)
         u["suspended"] = bool(u.get("suspended"))

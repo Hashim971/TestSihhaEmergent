@@ -8,7 +8,11 @@ const ROLES = [["patient", "Patients"], ["doctor", "Doctors"], ["pharmacist", "P
 export default function AdminOverview() {
   const [s, setS] = useState(null);
   useEffect(() => { api.get("/admin/platform-stats").then(({ data }) => setS(data)).catch(() => setS(false)); }, []);
-  if (s === null) return <p className="text-sm text-ink-soft">Loading…</p>;
+  if (s === null) return (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="admin-overview-loading">
+      {[0, 1, 2, 3].map((i) => <div key={i} className="card h-28 animate-pulse bg-sand/60" />)}
+    </div>
+  );
   if (s === false) return <p className="text-sm text-terracotta">Could not load platform numbers.</p>;
   const t = s.totals;
   return (

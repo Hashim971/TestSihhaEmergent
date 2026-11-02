@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 25: super-admin Users tab, demo exclusion in counts, user suspend/re-enable/demo toggle, Overview stats, and health chat (language lock, question cap, session restore, refresh-on-401). Backend: 12/12 pytest pass, including live LLM chat runs. English chat stayed English, Arabic got Arabic, switching back to English got English, one question per reply, closing summary + 'Download Report' after greeting + 5 questions. Frontend: Users page list/count/filters/include-demo/pagination/detail/suspend/re-enable/demo toggle and super-admin protection all work, and there is no horizontal overflow at 390px. Bugs found: (1) the UserDetailModal is positioned inside the .fade-up page container, so on desktop its header and close X are cut off above the viewport and cannot be clicked; (2) a chat race: clicking New Screening and sending before the new session loads sends the message to the PREVIOUS session and wipes the visible conversation (reproduced; this is a likely cause of the user's 'chat suddenly removed' report); (3) minor data-display issues.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/users/{id}", "issue": "UI reads the field 'auth_provider', but nothing ever writes it. Google users are stored with auth_providers.google=true and password_hash=null, so the 'Sign-in method' always shows 'Email & password'."},
+      {"endpoint": "POST /api/auth/register", "issue": "Does not set last_login_at, so users who registered (and were auto-signed-in) show 'Signed in never' while 'Active 1 h ago' (e.g. farahghabayen97@gmail.com)."},
+      {"endpoint": "POST /api/auth/google/session", "issue": "No suspended check: a suspended patient can still finish Google sign-in and get a session created (later API calls do return 403 from get_current_user). Add the SUSPENDED_MSG check here like in login/refresh."},
+      {"endpoint": "GET /api/admin/users", "issue": "The real-user filter currently returns 10 accounts (all @gmail.com: farahghabayen97, lemar.alsayyed2008, razan.mohd1993, hhisham93, ramzi18m, hanirahal51, rahalhashim, omar12 [doctor], hhisham, hashim). The user said there are only 5 real users, so some of these are probably the owner's own test accounts. The admin can mark them with the demo toggle; worth confirming with the user."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "UserDetailModal (also the shared Modal in components/admin/ui.jsx)", "issue": "The overlay uses 'fixed inset-0', but it is rendered inside <div class='fade-up' data-testid='users-page'>. The fadeUp animation uses fill-mode 'both', so transform: translateY(0) stays applied, and that makes the page div the containing block for fixed children. Result: the overlay only covers the users-page box, and the modal is centred on that short box. On 1920x1080 the modal's top (name, close X) sits above the viewport and Playwright reports the close button 'outside of the viewport' (cannot click). On mobile the overlay doesn't cover the header/tabs and the modal opens half below the fold. Fix: render the modal with createPortal(..., document.body), as ConfirmDialog.jsx already does.", "selector": "[data-testid='user-detail-modal'], [data-testid='user-detail-modal-close']", "priority": "HIGH"},
+      {"component": "HealthChat newSession", "issue": "Race condition (REPRODUCED). newSession() waits for POST /chat/sessions and loadSessions() before openSession() sets sessionId. If the patient types and sends during that window (API latency here is about 4s), send() uses the OLD sessionId. Then openSession(new) replaces the messages, so the user's message and the greeting vanish and only the streamed AI reply bubble is left. sessionStorage now points at the new, empty session, so after a reload the conversation appears 'removed'. DB proof: RACE_B message landed in chat_71a9… while the UI and sessionStorage were on chat_1c8c…. Fix: set sessionId/clear messages right after the POST (before loadSessions), disable input/send while creating or opening a session, and ignore stale openSession responses (track a request id). Same issue when clicking another session in the list while streaming: block switching while streaming.", "selector": "[data-testid='new-screening-btn'], [data-testid='chat-send-btn']", "priority": "HIGH"},
+      {"component": "HealthChat mount restore effect", "issue": "Same class of race, not reproduced: if the reopen effect (GET /chat/sessions) resolves after the user already sent a first message (which created a new session), the fallback picks a different 'latest active' session from the stale list and calls openSession, which overwrites the new conversation. Guard: skip the restore if sessionId is already set or a send is in flight.", "selector": "[data-testid='chat-messages']", "priority": "MEDIUM"},
+      {"component": "Users list fetch", "issue": "The debounced fetch doesn't cancel or ignore in-flight requests. With slow responses, an older filter's response can overwrite a newer one (seen briefly while testing). Use an AbortController or a request-id guard.", "selector": "[data-testid='users-count']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin Overview", "issues": ["Shows 'Loading…' for several seconds on first load; the API takes about 4s (Atlas latency). Consider skeletons."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter25_admin_users_chat.py", "/app/test_reports/pytest/iter25.xml"],
+  "action_items": [
+    "Render UserDetailModal (and the admin ui.jsx Modal) through createPortal to document.body so the header and close button are visible and the overlay covers the full viewport (HIGH)",
+    "Fix the HealthChat race: set the new sessionId immediately after the POST, disable send while a session is being created or opened, ignore stale openSession/restore responses, and block session switching while streaming (HIGH, likely cause of 'chat suddenly removed')",
+    "Store the sign-in method (e.g. derive Google from auth_providers.google / password_hash null) so the modal's 'Sign-in method' is correct",
+    "Set last_login_at on register",
+    "Add the suspended check to POST /api/auth/google/session",
+    "Optional: cancel stale requests in Users.jsx"
+  ],
+  "critical_code_review_comments": [
+    "fade-up with animation-fill-mode both leaves a transform on page wrappers, which breaks every fixed-position child that isn't portaled",
+    "HealthChat.send updates copy[copy.length-1] while streaming. If messages are replaced mid-stream (session switch), the streamed text overwrites the last message of the other session in the UI",
+    "_chat_turn_rules works well: language lock plus question budget verified with the live LLM"
+  ],
+  "updated_files": ["/app/backend/tests/test_iter25_admin_users_chat.py"],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "~80%: Users list/filters/suspend/demo/mobile OK, modal positioning broken, chat new-session race"},
+  "seed_data_creation": "None kept. solo.patient@sihha.ai was suspended, re-enabled and demo-toggled during the tests; it is restored to suspended=false, suspended_reason=null, and is_demo is unset (email rule marks it demo again). The 5 test chat sessions created for omar.patient were deleted.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "API latency via the preview URL is about 4s (Mongo Atlas). In Playwright, wait for the users-count text to change instead of using fixed sleeps; a fixed sleep made the first run click a stale row. Because of the modal bug, close the modal by clicking the overlay, not the X. To reproduce the chat race: on /chat with an existing session, click new-screening-btn, then immediately fill chat-input and click chat-send-btn. The message lands in the old session.",
+  "rca of the issue": "Chat removed: newSession() awaits create + list before switching sessionId, so a quick send goes to the old session and the later openSession() overwrites the messages. Modal clipped: a fixed overlay inside a transformed ancestor (.fade-up, fill-mode both)."
+}

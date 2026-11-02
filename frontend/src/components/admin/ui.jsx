@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { createPortal } from "react-dom";
 import { Copy, Check, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -54,16 +55,17 @@ export function Toggle({ checked, onChange, testid, disabled }) {
 }
 
 export function Modal({ title, onClose, children, testid }) {
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 bg-ink/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
-      <div className="card w-full max-w-md p-6 fade-up" onClick={(e) => e.stopPropagation()} data-testid={testid}>
+      <div className="card w-full max-w-md p-6 fade-up max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()} data-testid={testid}>
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-lg font-semibold">{title}</h2>
           <button onClick={onClose} data-testid={`${testid}-close`} className="p-1.5 rounded-full hover:bg-sand"><X className="h-4 w-4" /></button>
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

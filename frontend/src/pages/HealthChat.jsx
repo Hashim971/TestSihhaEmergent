@@ -19,6 +19,7 @@ export default function HealthChat() {
   const [input, setInput] = useState("");
   const [photo, setPhoto] = useState(null);
   const [streaming, setStreaming] = useState(false);
+  const [opening, setOpening] = useState(false);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [lastReport, setLastReport] = useState(null);
 
@@ -47,16 +48,25 @@ export default function HealthChat() {
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
 
+  const openReq = useRef(0);
   const openSession = async (sid) => {
+    const req = ++openReq.current;
     setSessionId(sid);
+    setMessages([]);
     sessionStorage.setItem(CHAT_KEY, sid);
-    const res = await api.get(`/chat/sessions/${sid}/messages`);
-    setMessages(res.data);
+    setOpening(true);
+    try {
+      const res = await api.get(`/chat/sessions/${sid}/messages`);
+      if (req === openReq.current) setMessages(res.data);
+    } finally {
+      if (req === openReq.current) setOpening(false);
+    }
   };
 
   useEffect(() => {
     // Reopen the conversation the patient was in, so a reload or navigation never blanks the chat.
     api.get("/chat/sessions").then(({ data }) => {
+      if (openReq.current > 0) return;
       const saved = sessionStorage.getItem(CHAT_KEY);
       const pick = data.find((s) => s.chat_session_id === saved) || data.find((s) => s.status === "active");
       if (pick) openSession(pick.chat_session_id).catch(() => {});
@@ -64,21 +74,33 @@ export default function HealthChat() {
   }, []);
 
   const newSession = async () => {
-    const res = await api.post("/chat/sessions", { profile_id: activeProfile.id });
-    await loadSessions();
-    openSession(res.data.chat_session_id);
+    if (streaming || opening) return;
+    openReq.current += 1;
+    setOpening(true);
+    try {
+      const res = await api.post("/chat/sessions", { profile_id: activeProfile.id });
+      await openSession(res.data.chat_session_id);
+      loadSessions();
+    } catch {
+      setOpening(false);
+      toast.error("Could not start a new screening");
+    }
   };
 
   const send = async () => {
-    if ((!input.trim() && !photo) || streaming) return;
+    if ((!input.trim() && !photo) || streaming || opening) return;
     let sid = sessionId;
     if (!sid) {
-      const res = await api.post("/chat/sessions", { profile_id: activeProfile.id });
-      sid = res.data.chat_session_id;
-      setSessionId(sid);
-      sessionStorage.setItem(CHAT_KEY, sid);
-      const msgs = await api.get(`/chat/sessions/${sid}/messages`);
-      setMessages(msgs.data);
+      openReq.current += 1;
+      setOpening(true);
+      try {
+        const res = await api.post("/chat/sessions", { profile_id: activeProfile.id });
+        sid = res.data.chat_session_id;
+        await openSession(sid);
+      } catch {
+        setOpening(false);
+        return toast.error("Could not start a screening");
+      }
       loadSessions();
     }
     const text = input;
@@ -194,7 +216,7 @@ export default function HealthChat() {
       {lastReport && <TriageCard report={lastReport} onRetriage={runTriage} />}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6" data-testid="health-chat-page">
         <div className="lg:col-span-1 space-y-3">
-        <button onClick={newSession} data-testid="new-screening-btn" className="btn-primary w-full justify-center">
+        <button onClick={newSession} disabled={streaming || opening} data-testid="new-screening-btn" className="btn-primary w-full justify-center">
           <Plus className="h-4 w-4" /> New Screening
         </button>
         {lastReport && <ShareScreeningCard report={lastReport} />}
@@ -204,6 +226,7 @@ export default function HealthChat() {
             <button
               key={s.chat_session_id}
               onClick={() => openSession(s.chat_session_id)}
+              disabled={streaming || opening}
               data-testid={`chat-session-${s.chat_session_id}`}
               className={`w-full text-left px-3 py-2.5 rounded-lg text-sm ${sessionId === s.chat_session_id ? "bg-forest text-white" : "hover:bg-sand"}`}
             >
@@ -268,11 +291,11 @@ export default function HealthChat() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && send()}
             placeholder={photo ? "Add a note about the photo (optional)" : "Describe your symptoms…"}
-            disabled={streaming}
+            disabled={streaming || opening}
             data-testid="chat-input"
             className="flex-1 min-w-0 border border-line rounded-full px-5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest"
           />
-          <button onClick={send} disabled={streaming || (!input.trim() && !photo)} data-testid="chat-send-btn" className="btn-primary !px-4">
+          <button onClick={send} disabled={streaming || opening || (!input.trim() && !photo)} data-testid="chat-send-btn" className="btn-primary !px-4">
             <Send className="h-4 w-4" />
           </button>
         </div>
