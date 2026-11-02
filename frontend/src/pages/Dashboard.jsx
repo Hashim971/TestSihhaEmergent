@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { api } from "../lib/api";
+import { GettingStarted } from "../components/GettingStarted";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
@@ -17,7 +18,7 @@ const vitalCards = [
 ];
 
 export default function Dashboard() {
-  const { activeProfile } = useAuth();
+  const { activeProfile, user } = useAuth();
   const [latest, setLatest] = useState({});
   const [vitals, setVitals] = useState([]);
   const [trends, setTrends] = useState(null);
@@ -76,6 +77,7 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+      {user?.role === "patient" && activeProfile.id === "self" && <GettingStarted />}
 
       {intakeTodo && (
         <div className="card p-6 flex flex-wrap items-center justify-between gap-4 border-sage"

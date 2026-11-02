@@ -8,8 +8,10 @@ import { Send, FileText, Plus, MessageSquare } from "lucide-react";
 import { ShareScreeningCard } from "../components/ShareScreeningCard";
 import { TriageCard } from "../components/TriageCard";
 import { ChatPhotoPicker, ChatPhotoPreview } from "../components/ChatPhoto";
+import { ScreeningSteps } from "../components/ScreeningSteps";
 
 const CHAT_KEY = "sihha:chat-session";
+const renderBold = (text) => (text || "").split(/\*\*(.+?)\*\*/g).map((part, i) => (i % 2 ? <strong key={i}>{part}</strong> : part));
 
 export default function HealthChat() {
   const { activeProfile } = useAuth();
@@ -255,7 +257,8 @@ export default function HealthChat() {
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4" data-testid="chat-messages">
+        {sessionId && <ScreeningSteps messages={messages} completed={sessions.find((s) => s.chat_session_id === sessionId)?.status === "completed"} />}
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4" data-testid="chat-messages">
           {!sessionId && messages.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center text-center gap-3">
               <MessageSquare className="h-10 w-10 text-sage" />
@@ -274,7 +277,7 @@ export default function HealthChat() {
                 {(m.photo_discarded || (m.localPhoto && m.photoKept === false)) && (
                   <p className="text-[11px] opacity-80 mb-1" data-testid={`chat-photo-discarded-${i}`}>Photo shared once — not saved</p>
                 )}
-                {m.content}
+                {renderBold(m.content)}
                 {m.streaming && m.content === "" && (
                   <span className="flex gap-1 py-1">
                     <span className="typing-dot" /><span className="typing-dot" style={{ animationDelay: "0.15s" }} /><span className="typing-dot" style={{ animationDelay: "0.3s" }} />

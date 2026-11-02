@@ -49,6 +49,8 @@ import AdminPharmacies from "./pages/admin/Pharmacies";
 import AdminOverview from "./pages/admin/Overview";
 import AdminStaging from "./pages/admin/Staging";
 import HospitalSignIn from "./pages/HospitalSignIn";
+import { AnalyticsTracker } from "./components/AnalyticsTracker";
+import AdminAnalytics from "./pages/admin/Analytics";
 
 export default function App() {
   return (
@@ -57,6 +59,7 @@ export default function App() {
         <LanguageProvider>
         <AuthProvider>
           <StagingBar />
+          <AnalyticsTracker />
           <AppRouter />
           <ServiceUnavailable />
           <LocalizedToaster />
@@ -118,6 +121,7 @@ function AppRouter() {
             <Route path="/admin/staging" element={<AdminStaging />} />
             <Route path="/admin/accounts" element={<Accounts />} />
             <Route path="/admin/users" element={<AdminUsers />} />
+            <Route path="/admin/analytics" element={<AdminAnalytics />} />
             <Route path="/admin/accounts/:accountId" element={<AccountWorkspace />} />
             <Route path="/admin/flags" element={<FeatureFlags />} />
             <Route path="/admin/demo-requests" element={<DemoRequests />} />

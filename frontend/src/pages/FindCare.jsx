@@ -2,11 +2,16 @@ import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Building2, MapPin, Search, Stethoscope, CheckCircle2, ArrowRight, Award } from "lucide-react";
 import { api } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 import { Stars } from "../components/RecentVisits";
 import { HospitalReviews } from "../components/HospitalReviews";
 
 export default function FindCare() {
   const [params] = useSearchParams();
+  const { user } = useAuth();
+  useEffect(() => {
+    if (user?.role === "patient") api.post("/getting-started", { find_care: true }).catch(() => {});
+  }, [user?.role]);
   const navigate = useNavigate();
   const [hospitals, setHospitals] = useState(null);
   const [reviewing, setReviewing] = useState(null);

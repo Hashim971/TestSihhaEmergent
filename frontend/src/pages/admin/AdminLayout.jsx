@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, Navigate, Outlet, useNavigate } from "react-router-dom";
-import { Building2, ToggleRight, UserCheck, Search, ArrowLeft, LogOut, ShieldCheck, Inbox, Store, LayoutDashboard, FlaskConical, Users } from "lucide-react";
+import { Building2, ToggleRight, UserCheck, Search, ArrowLeft, LogOut, ShieldCheck, Inbox, Store, LayoutDashboard, FlaskConical, Users, MousePointerClick } from "lucide-react";
 import { LanguageToggle } from "../../components/LanguageToggle";
 import { useAuth } from "../../context/AuthContext";
 import { usePlatform } from "../../context/PlatformContext";
@@ -11,6 +11,7 @@ const nav = [
   { to: "/admin/overview", label: "Overview", icon: LayoutDashboard, testid: "admin-nav-overview" },
   { to: "/admin/accounts", label: "Accounts", icon: Building2, testid: "admin-nav-accounts" },
   { to: "/admin/users", label: "Users", icon: Users, testid: "admin-nav-users" },
+  { to: "/admin/analytics", label: "Analytics", icon: MousePointerClick, testid: "admin-nav-analytics" },
   { to: "/admin/flags", label: "Feature switches", icon: ToggleRight, testid: "admin-nav-flags" },
   { to: "/admin/demo-requests", label: "Demo requests", icon: Inbox, testid: "admin-nav-demo-requests" },
   { to: "/admin/assignments", label: "Doctor assignments", icon: UserCheck, testid: "admin-nav-assignments" },

@@ -3,6 +3,7 @@ import json
 import uuid
 import logging
 import re
+from collections import Counter
 import random
 import time
 from PIL import Image, ImageOps
@@ -526,6 +527,13 @@ async def seed_and_index():
     await db.health_reports.create_index([("user_id", 1), ("generated_at", -1)])
     await db.imported_records.create_index([("account_id", 1), ("user_id", 1)])
     await db.feature_flags.create_index("key", unique=True)
+    await db.analytics_events.create_index("at", expireAfterSeconds=ANALYTICS_RETENTION_DAYS * 86400)
+    await db.analytics_events.create_index([("type", 1), ("path", 1), ("at", -1)])
+    await db.analytics_events.create_index([("session_id", 1), ("t", 1)])
+    await db.analytics_sessions.create_index("session_id", unique=True)
+    await db.analytics_sessions.create_index("last_seen", expireAfterSeconds=ANALYTICS_RETENTION_DAYS * 86400)
+    await db.analytics_replays.create_index([("session_id", 1), ("seq", 1)])
+    await db.analytics_replays.create_index("at", expireAfterSeconds=ANALYTICS_RETENTION_DAYS * 86400)
     if IS_STAGING:
         await seed_demo_accounts()
         await seed_demo_hospital()
@@ -1037,6 +1045,14 @@ class ChatMessageIn(BaseModel):
 
 
 CHAT_SOFT_QUESTIONS, CHAT_MAX_QUESTIONS = 4, 6
+# Topic order mirrors the patient-facing progress steps: Symptom → Timing → Severity → Details → Summary.
+CHAT_TOPIC_HINTS = [
+    "Find out the main problem in the patient's own words.",
+    "Next topic: timing — when it started and whether it came on suddenly or gradually (skip if already told).",
+    "Next topic: severity — how bad it is (0 to 10) and how it affects daily life (skip if already told).",
+    "Next topic: other details — the most relevant of: location/character, other symptoms and important absent ones, "
+    "what they've tried, relevant history.",
+]
 
 
 def _text_language(text: str) -> Optional[str]:
@@ -1058,10 +1074,12 @@ def _chat_turn_rules(history: list) -> str:
              "- Do not repeat any question already asked above; move on to a new topic."]
     if asked >= CHAT_MAX_QUESTIONS:
         rules.append(f"- You have already asked {asked} questions — the limit. Ask NO more questions. Give the finishing "
-                     "summary now and tell them to tap Download Report.")
-    elif asked >= CHAT_SOFT_QUESTIONS:
+                     "summary now and tell them to tap Download Report (use that exact button name).")
+    else:
+        rules.append("- " + CHAT_TOPIC_HINTS[min(asked, len(CHAT_TOPIC_HINTS) - 1)] + " (Safety checks always come first.)")
+    if CHAT_SOFT_QUESTIONS <= asked < CHAT_MAX_QUESTIONS:
         rules.append(f"- You have asked {asked} of at most {CHAT_MAX_QUESTIONS} questions. If you already have a clear "
-                     "picture, finish now; otherwise ask only the single most important remaining question.")
+                     "picture, finish now and tell them to tap Download Report; otherwise ask only the single most important remaining question.")
     return "\n".join(rules)
 
 
@@ -5661,6 +5679,247 @@ async def admin_mark_demo(user_id: str, body: AdminUserDemo, admin=Depends(requi
     if not res.matched_count:
         raise HTTPException(status_code=404, detail="User not found")
     return await admin_user_detail(user_id, admin)
+
+
+# ---------- Getting started (B2C patient guidance) ----------
+@api.get("/getting-started")
+async def getting_started(user=Depends(require_not_pharmacist)):
+    uid = user["user_id"]
+    sids = [s["chat_session_id"] for s in await db.chat_sessions.find({"user_id": uid}, {"_id": 0, "chat_session_id": 1}).to_list(200)]
+    gs = user.get("getting_started") or {}
+    steps = {
+        "chat": bool(sids) and bool(await db.chat_messages.find_one({"chat_session_id": {"$in": sids}, "role": "user"}, {"_id": 1})),
+        "medications": bool(await db.medications.find_one({"user_id": uid}, {"_id": 1})),
+        "pill_id": bool(await db.pill_history.find_one({"user_id": uid}, {"_id": 1})),
+        "find_care": bool(gs.get("find_care")),
+    }
+    return {"steps": steps, "done": sum(steps.values()), "total": len(steps),
+            "tour_done": bool(gs.get("tour_done")), "dismissed": bool(gs.get("dismissed"))}
+
+
+class GettingStartedUpdate(BaseModel):
+    find_care: Optional[bool] = None
+    tour_done: Optional[bool] = None
+    dismissed: Optional[bool] = None
+
+
+@api.post("/getting-started")
+async def update_getting_started(body: GettingStartedUpdate, user=Depends(require_not_pharmacist)):
+    update = {f"getting_started.{k}": v for k, v in body.model_dump(exclude_none=True).items()}
+    if update:
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": update})
+    return await getting_started(await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION))
+
+
+# ---------- Product analytics (heatmaps, funnels, journeys, frustration, replays) ----------
+ANALYTICS_RETENTION_DAYS = 30
+ANALYTICS_TYPES = {"pageview", "click", "leave", "rage", "dead"}
+_ID_SEGMENT = re.compile(r"^(?=.*\d)[A-Za-z0-9_-]{6,}$")
+
+
+def _norm_path(path: str) -> str:
+    path = (path or "/").split("?")[0].split("#")[0][:200]
+    return "/".join(":id" if _ID_SEGMENT.match(seg) else seg for seg in path.split("/")) or "/"
+
+
+class AnalyticsEventIn(BaseModel):
+    type: str
+    path: str = Field(max_length=300)
+    t: int
+    x: Optional[float] = None
+    y: Optional[float] = None
+    vw: Optional[int] = None
+    dh: Optional[int] = None
+    target: Optional[str] = Field(default=None, max_length=160)
+    duration: Optional[int] = None
+
+
+class AnalyticsBatch(BaseModel):
+    session_id: str = Field(max_length=60)
+    events: List[AnalyticsEventIn] = Field(default_factory=list, max_length=500)
+    replay: List[dict] = Field(default_factory=list, max_length=3000)
+    seq: int = 0
+
+
+def _ts_range(docs: list, replay: list):
+    ts = [d["t"] for d in docs] + [e.get("timestamp") for e in replay if isinstance(e.get("timestamp"), int)]
+    return (min(ts), max(ts)) if ts else (None, None)
+
+
+@api.post("/analytics/collect")
+async def analytics_collect(body: AnalyticsBatch, user=Depends(get_current_user)):
+    if user.get("is_admin") or not re.fullmatch(r"[A-Za-z0-9_-]{8,60}", body.session_id):
+        return {"ok": True}
+    now = now_utc()
+    meta = {"session_id": body.session_id, "user_id": user["user_id"], "role": user.get("role"),
+            "is_demo": is_demo_user(user)}
+    docs = [{**meta, "type": e.type, "path": _norm_path(e.path), "t": e.t, "at": now, "x": e.x, "y": e.y,
+             "vw": e.vw, "dh": e.dh, "target": e.target,
+             "duration": min(e.duration, 3_600_000) if e.duration else None,
+             "device": "mobile" if (e.vw or 1280) < 768 else "desktop"}
+            for e in body.events if e.type in ANALYTICS_TYPES]
+    if docs:
+        await db.analytics_events.insert_many(docs)
+    replay = body.replay if body.replay and len(json.dumps(body.replay)) < 4_000_000 else []
+    if replay:
+        await db.analytics_replays.insert_one({"session_id": body.session_id, "seq": body.seq, "at": now, "events": replay})
+    first_t, last_t = _ts_range(docs, replay)
+    vw = next((d["vw"] for d in docs if d.get("vw")), None)
+    sets = {"last_seen": now, "last_at": iso()}
+    if last_t:
+        sets["last_t"] = last_t
+    if vw:
+        sets["device"] = "mobile" if vw < 768 else "desktop"
+    if replay:
+        sets["has_replay"] = True
+    upd = {"$setOnInsert": {**meta, "started_at": iso()}, "$set": sets, "$min": {"first_t": first_t or 2**62},
+           "$inc": {"event_count": len(docs), "rage": sum(d["type"] == "rage" for d in docs),
+                    "dead": sum(d["type"] == "dead" for d in docs), "pageviews": sum(d["type"] == "pageview" for d in docs)}}
+    pages = list({d["path"] for d in docs if d["type"] == "pageview"})
+    if pages:
+        upd["$addToSet"] = {"pages": {"$each": pages}}
+    await db.analytics_sessions.update_one({"session_id": body.session_id}, upd, upsert=True)
+    return {"ok": True}
+
+
+def _an_match(days: int, role: str, include_demo: bool, **extra) -> dict:
+    q = {"at": {"$gte": now_utc() - timedelta(days=max(1, min(days, ANALYTICS_RETENTION_DAYS)))}, **extra}
+    if role in ("patient", "doctor", "pharmacist"):
+        q["role"] = role
+    if not include_demo:
+        q["is_demo"] = False
+    return q
+
+
+def _sess_match(days: int, role: str, include_demo: bool) -> dict:
+    q = _an_match(days, role, include_demo)
+    q["last_seen"] = q.pop("at")
+    return q
+
+
+def _sess_duration(s: dict) -> int:
+    first, last = s.get("first_t"), s.get("last_t")
+    return last - first if first and last and first < 2**61 else 0
+
+
+@api.get("/admin/analytics/summary")
+async def analytics_summary(days: int = 7, role: str = "", include_demo: bool = False, admin=Depends(require_admin)):
+    m = _an_match(days, role, include_demo)
+    sessions = await db.analytics_sessions.find(_sess_match(days, role, include_demo),
+                                                {"_id": 0, "first_t": 1, "last_t": 1, "user_id": 1, "device": 1}).to_list(20000)
+    durations = [d for d in map(_sess_duration, sessions) if d]
+    is_type = lambda t: {"$cond": [{"$eq": ["$type", t]}, 1, 0]}  # noqa: E731
+    pages = await db.analytics_events.aggregate([
+        {"$match": m},
+        {"$group": {"_id": "$path", "views": {"$sum": is_type("pageview")}, "clicks": {"$sum": is_type("click")},
+                    "frustration": {"$sum": {"$cond": [{"$in": ["$type", ["rage", "dead"]]}, 1, 0]}},
+                    "avg_ms": {"$avg": {"$cond": [{"$eq": ["$type", "leave"]}, "$duration", None]}}}},
+        {"$sort": {"views": -1}}, {"$limit": 40}]).to_list(40)
+    counts = {r["_id"]: r["n"] for r in await db.analytics_events.aggregate([
+        {"$match": m}, {"$group": {"_id": "$type", "n": {"$sum": 1}}}]).to_list(10)}
+    return {"sessions": len(sessions), "users": len({s["user_id"] for s in sessions}),
+            "avg_session_ms": int(sum(durations) / len(durations)) if durations else 0,
+            "pageviews": counts.get("pageview", 0), "clicks": counts.get("click", 0),
+            "rage_clicks": counts.get("rage", 0), "dead_clicks": counts.get("dead", 0),
+            "devices": {d: sum(1 for s in sessions if s.get("device") == d) for d in ("desktop", "mobile")},
+            "pages": [{"path": p["_id"], "views": p["views"], "clicks": p["clicks"], "frustration": p["frustration"],
+                       "avg_ms": int(p["avg_ms"] or 0)} for p in pages]}
+
+
+@api.get("/admin/analytics/heatmap")
+async def analytics_heatmap(path: str, device: str = "desktop", days: int = 7, role: str = "", include_demo: bool = False,
+                            admin=Depends(require_admin)):
+    device = device if device in ("desktop", "mobile") else "desktop"
+    m = _an_match(days, role, include_demo, path=_norm_path(path), device=device)
+    points = await db.analytics_events.find({**m, "type": {"$in": ["click", "rage", "dead"]}, "x": {"$ne": None}},
+                                            {"_id": 0, "x": 1, "y": 1, "type": 1}).sort("at", -1).limit(5000).to_list(5000)
+    targets = await db.analytics_events.aggregate([
+        {"$match": {**m, "type": "click", "target": {"$ne": None}}},
+        {"$group": {"_id": "$target", "n": {"$sum": 1}}}, {"$sort": {"n": -1}}, {"$limit": 15}]).to_list(15)
+    recorded = await db.analytics_sessions.distinct("session_id", {"has_replay": True, "pages": m["path"], "device": device})
+    snapshot = await db.analytics_events.find_one({**m, "type": "pageview", "session_id": {"$in": recorded}},
+                                                  {"_id": 0, "session_id": 1, "t": 1, "vw": 1}, sort=[("at", -1)])
+    if snapshot:
+        leave = await db.analytics_events.find_one({"session_id": snapshot["session_id"], "type": "leave", "path": m["path"],
+                                                    "t": {"$gte": snapshot["t"]}}, {"_id": 0, "t": 1}, sort=[("t", 1)])
+        snapshot["until"] = leave["t"] if leave else None
+    return {"path": m["path"], "device": device, "points": points,
+            "top_targets": [{"target": t["_id"], "clicks": t["n"]} for t in targets], "snapshot": snapshot}
+
+
+@api.get("/admin/analytics/funnel")
+async def analytics_funnel(days: int = 30, b2c_only: bool = True, include_demo: bool = False, admin=Depends(require_admin)):
+    q = {"role": "patient", "created_at": {"$gte": iso(now_utc() - timedelta(days=max(1, min(days, 365))))}}
+    if b2c_only:
+        q["account_id"] = None
+    users = await db.users.find({"$and": [q] + ([] if include_demo else [REAL_USER_FILTER])},
+                                {"_id": 0, "user_id": 1, "onboarding_completed": 1, "getting_started": 1}).to_list(20000)
+    ids = {u["user_id"] for u in users}
+    chat_sids = {s["chat_session_id"]: s["user_id"] for s in await db.chat_sessions.find(
+        {"user_id": {"$in": list(ids)}}, {"_id": 0, "chat_session_id": 1, "user_id": 1}).to_list(100000)}
+    chatted = {chat_sids[s] for s in await db.chat_messages.distinct(
+        "chat_session_id", {"chat_session_id": {"$in": list(chat_sids)}, "role": "user"})}
+    meds = set(await db.medications.distinct("user_id", {"user_id": {"$in": list(ids)}}))
+    pills = set(await db.pill_history.distinct("user_id", {"user_id": {"$in": list(ids)}}))
+    care = {u["user_id"] for u in users if (u.get("getting_started") or {}).get("find_care")}
+    steps = [("Signed up", ids), ("Finished profile", {u["user_id"] for u in users if u.get("onboarding_completed")}),
+             ("Started a health chat", chatted), ("Added a medication", meds), ("Used Pill ID", pills), ("Opened Find Care", care)]
+    return {"total": len(ids), "steps": [{"label": label, "users": len(s & ids)} for label, s in steps],
+            "none_after_signup": len(ids - chatted - meds - pills - care)}
+
+
+@api.get("/admin/analytics/journeys")
+async def analytics_journeys(days: int = 7, role: str = "", include_demo: bool = False, admin=Depends(require_admin)):
+    views = await db.analytics_events.find(_an_match(days, role, include_demo, type="pageview"),
+                                           {"_id": 0, "session_id": 1, "path": 1, "t": 1}).sort([("session_id", 1), ("t", 1)]).to_list(50000)
+    by_sess = {}
+    for v in views:
+        by_sess.setdefault(v["session_id"], []).append(v["path"])
+    trans, entries, exits = Counter(), Counter(), Counter()
+    for paths in by_sess.values():
+        paths = [p for i, p in enumerate(paths) if i == 0 or p != paths[i - 1]]
+        entries[paths[0]] += 1
+        exits[paths[-1]] += 1
+        trans.update(zip(paths, paths[1:]))
+    return {"sessions": len(by_sess),
+            "transitions": [{"from": a, "to": b, "count": n} for (a, b), n in trans.most_common(30)],
+            "entries": [{"path": p, "count": n} for p, n in entries.most_common(10)],
+            "exits": [{"path": p, "count": n} for p, n in exits.most_common(10)]}
+
+
+@api.get("/admin/analytics/frustration")
+async def analytics_frustration(days: int = 7, role: str = "", include_demo: bool = False, admin=Depends(require_admin)):
+    rows = await db.analytics_events.aggregate([
+        {"$match": _an_match(days, role, include_demo, type={"$in": ["rage", "dead"]})},
+        {"$sort": {"t": 1}},
+        {"$group": {"_id": {"type": "$type", "path": "$path", "target": "$target"}, "n": {"$sum": 1},
+                    "users": {"$addToSet": "$user_id"}, "last": {"$max": "$at"},
+                    "session_id": {"$last": "$session_id"}, "t": {"$last": "$t"}}},
+        {"$sort": {"n": -1}}, {"$limit": 50}]).to_list(50)
+    return [{"type": r["_id"]["type"], "path": r["_id"]["path"], "target": r["_id"]["target"], "count": r["n"],
+             "users": len(r["users"]), "last_at": r["last"].replace(tzinfo=timezone.utc).isoformat(), "session_id": r["session_id"], "t": r["t"]} for r in rows]
+
+
+@api.get("/admin/analytics/replays")
+async def analytics_replays(days: int = 7, role: str = "", include_demo: bool = False, frustrated: bool = False,
+                            admin=Depends(require_admin)):
+    q = {**_sess_match(days, role, include_demo), "has_replay": True}
+    if frustrated:
+        q["$or"] = [{"rage": {"$gt": 0}}, {"dead": {"$gt": 0}}]
+    rows = await db.analytics_sessions.find(q, {"_id": 0, "last_seen": 0}).sort("last_at", -1).limit(60).to_list(60)
+    emails = {u["user_id"]: u.get("email") for u in await db.users.find(
+        {"user_id": {"$in": list({r["user_id"] for r in rows})}}, {"_id": 0, "user_id": 1, "email": 1}).to_list(100)}
+    return [{**r, "email": emails.get(r["user_id"]), "duration_ms": _sess_duration(r)} for r in rows]
+
+
+@api.get("/admin/analytics/replays/{session_id}")
+async def analytics_replay(session_id: str, admin=Depends(require_admin)):
+    chunks = await db.analytics_replays.find({"session_id": session_id}, {"_id": 0, "events": 1}).sort("seq", 1).to_list(2000)
+    events = sorted([e for c in chunks for e in c["events"]], key=lambda e: e.get("timestamp", 0))
+    if not events:
+        raise HTTPException(status_code=404, detail="No recording for this session")
+    return {"session_id": session_id, "events": events}
+
 
 
 @api.get("/admin/staging")
