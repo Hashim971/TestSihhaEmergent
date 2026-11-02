@@ -51,3 +51,6 @@ All accounts use standard email/password JWT auth (httpOnly cookies).
   "Jeddah Family Clinics", "Eastern Health Group". IDs are random ACC-XXXXXX — look them up via GET /api/admin/accounts.
 - dr.layla@sihha.ai is account_admin of Al Noor → sees "My Hospital" (/my-hospital). omar/noura patients are its customers.
 - Tenant preview: /auth?tenant=ACC-XXXXXX applies that hospital's branding (staging only); exit via the staging bar X.
+
+## Cron (added Jun 2026)
+- Cron endpoints POST /api/cron/monthly-reports and /api/cron/audio-purge need `Authorization: Bearer $WEBHOOK_CRON_SECRET` (backend/.env).

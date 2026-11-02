@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Outlet, NavLink, useNavigate } from "react-router-dom";
+import { Outlet, NavLink, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../lib/api";
 import { toast } from "sonner";
@@ -16,6 +16,7 @@ const patientNav = [
   { to: "/chat", label: "Health Chat", icon: MessageSquare, testid: "nav-chat", flag: "health_chat" },
   { to: "/pill-id", label: "Pill ID", icon: ScanLine, testid: "nav-pill-id", flag: "pill_id" },
   { to: "/medications", label: "Medications", icon: Pill, testid: "nav-medications" },
+  { to: "/find-care", label: "Find Care", icon: Building2, testid: "nav-find-care", flag: "booking" },
   { to: "/book", label: "Book a Visit", icon: CalendarPlus, testid: "nav-book", flag: "booking" },
   { to: "/prescriptions", label: "Prescriptions", icon: FileSignature, testid: "nav-prescriptions", flag: "prescriptions" },
   { to: "/visits", label: "Visit Summaries", icon: FileHeart, testid: "nav-visits", flag: "visit_summaries" },
@@ -51,6 +52,8 @@ export default function Layout() {
   useEffect(() => { loadAlerts(); }, []);
 
   const unread = alerts.filter((a) => !a.read).length;
+
+  if (user.role === "pharmacist") return <Navigate to="/pharmacy-portal" replace />;
 
   const markRead = async (id) => {
     await api.post(`/alerts/${id}/read`);

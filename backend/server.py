@@ -32,7 +32,7 @@ from typing import Optional, List, Any
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
 from gradio_client import Client as GradioClient, handle_file
 
-from agents import tools as agent_tools
+from agents import tools as agent_tools, load_prompt
 from agents.runner import run_agent, AgentRunFailed
 from agents.previsit import PreVisitBriefingAgent
 from agents.briefing_qa import BriefingQAAgent
@@ -45,7 +45,7 @@ from agents.patient_summary import PatientSummaryAgent
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-from emailer import send_email, password_reset_email, account_invite_email, usage_report_email, demo_alert_email
+from emailer import send_email, password_reset_email, account_invite_email, usage_report_email, demo_alert_email, notice_email
 from usage_report import render_usage_report
 
 client = AsyncIOMotorClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=8000)
@@ -55,52 +55,8 @@ LLM_KEY = os.environ["EMERGENT_LLM_KEY"]
 app = FastAPI(title="Sihha AI")
 api = APIRouter(prefix="/api")
 
-# Original system prompt from the user's TestSihha project (healthAI.ts)
-SCREENING_SYSTEM_PROMPT = (
-    "This GPT is designed to provide accurate and detailed information regarding various medical conditions. "
-    "It should ask the patient to further explain what are they feeling exactly to give proper answers before "
-    "jumping into conclusions basically it should do basic health screening or symptom checking as well as give "
-    "proper diagnostics like a professional doctor would and assess the user's symptoms to give a proper health "
-    "screening report to be used by the healthcare professional as they will be relying on it (all questions must "
-    "be asked one by one give room for the patient to answer the questions one by one). The questions should be "
-    "one by one giving the patient room to answer all questions properly (all questions must be asked one by one). "
-    "It should always reference reputable sources and maintain a formal, professional tone. In situations where "
-    "there is insufficient information to provide a detailed response, it should ask for clarification and suggest "
-    "consulting a healthcare professional as well as suggesting what the user should do depending on their situation "
-    "and also ask the user if they need the health screening medical report after the health screening is over. "
-    "It should also utilize the dataset provided. Generate a report after the symptom check is done but ask the "
-    "user if they need it first."
-)
-
-REPORT_PROMPT = """Generate a comprehensive medical screening report based on this conversation. Include:
-
-1. CHIEF COMPLAINT
-   - Main symptoms
-   - Onset and duration
-   - Severity and characteristics
-
-2. HISTORY OF PRESENT ILLNESS
-   - Progression of symptoms
-   - Associated symptoms
-   - Aggravating/relieving factors
-   - Impact on daily activities
-
-3. ASSESSMENT SUMMARY
-   - Key findings from the conversation
-   - Areas requiring attention
-
-4. RECOMMENDATIONS
-   - Suggested next steps
-   - Lifestyle modifications if applicable
-   - Warning signs to watch for
-
-5. IMPORTANT NOTES
-   - This is not a diagnosis
-   - Advise consulting a healthcare provider
-   - Note any concerning symptoms that require immediate attention
-
-Base this report on the following conversation:
-"""
+SCREENING_SYSTEM_PROMPT, SCREENING_PROMPT_VERSION = load_prompt("screening_chat_v1.md")
+SCREENING_REPORT_PROMPT, SCREENING_REPORT_VERSION = load_prompt("screening_report_v1.md")
 
 PILL_ID_PROMPT = (
     "You are a pharmaceutical identification expert for the Sihha AI healthcare platform. "
@@ -668,6 +624,22 @@ def health_profile_context(user) -> str:
 
 
 # ---------- Dependents ----------
+async def screening_subject_context(user, profile_id: str) -> str:
+    """Who the screening is about: the user's own health profile, or the dependent a caregiver is speaking for."""
+    if profile_id == user["user_id"]:
+        return health_profile_context(user)
+    dep = await db.dependents.find_one({"dependent_id": profile_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not dep:
+        return ""
+    details = [f"name {dep.get('name')}", f"relation to the person typing: {dep.get('relation')}"]
+    if dep.get("date_of_birth"):
+        details.append(f"date of birth {dep['date_of_birth']}")
+    if dep.get("gender"):
+        details.append(f"sex {dep['gender']}")
+    return ("\n\nThis screening is for a dependent. The person typing is their caregiver (" + user.get("name", "caregiver")
+            + "). Dependent: " + "; ".join(details) + ". No health profile is on file for the dependent.")
+
+
 class DependentCreate(BaseModel):
     name: str
     relation: str
@@ -866,7 +838,9 @@ async def create_chat_session(body: ChatSessionCreate, user=Depends(get_current_
         "started_at": iso(),
     }
     await db.chat_sessions.insert_one(session)
-    greeting = "Hello! I'm here to help assess your health concerns. Could you please tell me what brings you in today?"
+    greeting = ("Hello, I'm the Sihha screening assistant. I'll ask you one question at a time so your doctor gets a "
+                "clear picture — I can't diagnose. If you have chest pain, trouble breathing or another emergency, "
+                "call 997 now. What is bothering you today?")
     await db.chat_messages.insert_one({
         "message_id": f"msg_{uuid.uuid4().hex[:12]}",
         "chat_session_id": session["chat_session_id"],
@@ -911,9 +885,7 @@ async def send_chat_message(sid: str, body: ChatMessageIn, user=Depends(get_curr
 
     history = await db.chat_messages.find({"chat_session_id": sid}, {"_id": 0}).sort("created_at", 1).to_list(100)
     context = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history[:-1]][-30:])
-    system = SCREENING_SYSTEM_PROMPT
-    if session["profile_id"] == user["user_id"]:
-        system += health_profile_context(user)
+    system = SCREENING_SYSTEM_PROMPT + await screening_subject_context(user, session["profile_id"])
     if context:
         system += "\n\nConversation so far:\n" + context
 
@@ -955,16 +927,18 @@ async def generate_report(sid: str, user=Depends(get_current_user)):
     history = await db.chat_messages.find({"chat_session_id": sid}, {"_id": 0}).sort("created_at", 1).to_list(200)
     convo = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history])
     chat = LlmChat(
-        api_key=LLM_KEY, session_id=f"report_{sid}",
-        system_message="You are a medical report writer. Output plain text sections, no markdown symbols like ** or #.",
+        api_key=LLM_KEY, session_id=f"report_{sid}", system_message=SCREENING_REPORT_PROMPT,
     ).with_model("openai", "gpt-5.5")
-    result = await chat.send_message(UserMessage(text=REPORT_PROMPT + convo))
+    context = await screening_subject_context(user, session["profile_id"])
+    result = await chat.send_message(UserMessage(
+        text=(context.strip() or "No health profile on file.") + "\n\nConversation:\n" + convo))
     report = {
         "report_id": f"report_{uuid.uuid4().hex[:12]}",
         "chat_session_id": sid,
         "user_id": user["user_id"],
         "profile_id": session["profile_id"],
         "content": result,
+        "prompt_version": f"report-{SCREENING_REPORT_VERSION}/chat-{SCREENING_PROMPT_VERSION}",
         "generated_at": iso(),
     }
     await db.health_reports.insert_one(report)
@@ -2642,8 +2616,12 @@ async def list_pharmacies(city: Optional[str] = None, delivery_zone: Optional[st
             continue
         card = _pharmacy_card(pharmacy)
         card["branches"] = [{**b, "directions_url": _directions_url(b)} for b in branches]
+        card["_rank"] = _rank_key(pharmacy)
         out.append(card)
-    out.sort(key=lambda p: (0 if p["sponsored"] else 1, p["name_en"]))
+    out.sort(key=lambda p: (p.pop("_rank"), p["name_en"] or ""))
+    sponsored = [p["pharmacy_id"] for p in out if p["sponsored"]]
+    if sponsored:
+        await db.pharmacies.update_many({"pharmacy_id": {"$in": sponsored}}, {"$inc": {"stats.impressions": 1}})
     return out
 
 
@@ -3109,15 +3087,17 @@ async def _open_slots(doctor_user_id: str, days: int = 14):
 
 @api.get("/booking/doctors")
 async def bookable_doctors(specialty: Optional[str] = None, city: Optional[str] = None,
-                           user=Depends(get_current_user)):
+                           account_id: Optional[str] = None, user=Depends(get_current_user)):
     """The patient's own doctor first, then anyone else who publishes slots."""
     query = {"role": "doctor", "email": {"$ne": ADMIN_EMAIL}}
+    if account_id:
+        query["account_id"] = account_id.upper()
     if specialty:
         query["specialty"] = {"$regex": re.escape(specialty), "$options": "i"}
     if city:
         query["city"] = {"$regex": re.escape(city), "$options": "i"}
     doctors = await db.users.find(query, {"_id": 0, "user_id": 1, "name": 1, "specialty": 1, "clinic": 1,
-                                          "city": 1, "bio": 1, "clinic_phone": 1}).to_list(200)
+                                          "city": 1, "bio": 1, "clinic_phone": 1, "account_id": 1}).to_list(200)
     published = {a["doctor_user_id"] for a in await db.doctor_availability.find(
         {"weekly": {"$ne": []}}, {"_id": 0, "doctor_user_id": 1}).to_list(200)}
     mine = user.get("assigned_doctor_user_id")
@@ -3150,6 +3130,7 @@ class BookingIn(BaseModel):
     reason_for_visit: str = ""
     report_id: Optional[str] = None
     profile_id: Optional[str] = None
+    share_record: bool = False
 
 
 @api.post("/booking")
@@ -3191,12 +3172,15 @@ async def book_visit(body: BookingIn, user=Depends(get_current_user)):
         "booked_by": "patient",
         "triage_level": triage_level,
         "screening_report_id": body.report_id,
+        "record_shared": body.share_record or doctor["user_id"] == user.get("assigned_doctor_user_id"),
         "created_at": iso(),
         "updated_at": iso(),
     }
     await db.encounters.insert_one(dict(encounter))
 
-    if doctor["user_id"] != user.get("assigned_doctor_user_id"):
+    if body.share_record and doctor.get("account_id"):
+        await _set_active_hospital(user, doctor["account_id"])
+    if body.share_record and doctor["user_id"] != user.get("assigned_doctor_user_id"):
         await db.care_grants.insert_one({
             "grant_id": f"grant_{uuid.uuid4().hex[:12]}",
             "patient_user_id": user["user_id"],
@@ -3207,7 +3191,7 @@ async def book_visit(body: BookingIn, user=Depends(get_current_user)):
             "expires_at": iso(now_utc() + timedelta(days=CARE_GRANT_DAYS)),
             "created_at": iso(),
         })
-    if report:
+    if report and body.share_record:
         await db.health_reports.update_one(
             {"report_id": body.report_id},
             {"$set": {"shared_encounter_id": encounter["encounter_id"], "shared_at": iso()}})
@@ -3656,6 +3640,9 @@ class AccountIn(BaseModel):
 
 
 class AccountPatch(BaseModel):
+    listed_in_app: Optional[bool] = None
+    about: Optional[str] = Field(default=None, max_length=600)
+    specialties: Optional[List[str]] = Field(default=None, max_length=20)
     name: Optional[str] = Field(default=None, min_length=2, max_length=120)
     type: Optional[str] = Field(default=None, pattern="^(hospital|clinic|pharmacy_group)$")
     status: Optional[str] = Field(default=None, pattern="^(trial|subscribed|suspended)$")
@@ -4248,8 +4235,9 @@ def _verify_cron(request: Request):
 
 
 async def _claim_cron_run(request: Request, name: str) -> bool:
+    raw = await request.body()
     try:
-        body = await request.json()
+        body = json.loads(raw) if raw.strip() else {}
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid body")
     run_id = request.headers.get("x-webhook-id") or (body or {}).get("run_id") or f"{name}:{uuid.uuid4().hex}"
@@ -4326,6 +4314,548 @@ async def seed_demo_accounts():
         for email, account_role in demo["members"]:
             await db.users.update_one({"email": email, "account_id": {"$in": [None]}},
                                       {"$set": {"account_id": account_id, "account_role": account_role}})
+
+
+# ---------- Standalone patients: hospital finder ----------
+LISTABLE_TYPES = ("hospital", "clinic")
+
+
+class HospitalChoice(BaseModel):
+    account_id: Optional[str] = Field(default=None, max_length=20)
+
+
+class ListingPatch(BaseModel):
+    listed_in_app: Optional[bool] = None
+    city: Optional[str] = Field(default=None, max_length=80)
+    about: Optional[str] = Field(default=None, max_length=600)
+    specialties: Optional[List[str]] = Field(default=None, max_length=20)
+
+
+def _hospital_card(account: dict, doctors: List[dict], published: set) -> dict:
+    branding = account.get("branding") or {}
+    return {
+        "account_id": account["account_id"],
+        "name": branding.get("display_name") or account["name"],
+        "legal_name": account["name"],
+        "type": account.get("type"),
+        "city": account.get("city"),
+        "about": account.get("about") or "",
+        "specialties": account.get("specialties") or sorted({d["specialty"] for d in doctors if d.get("specialty")}),
+        "doctor_count": len(doctors),
+        "bookable_doctor_count": sum(1 for d in doctors if d["user_id"] in published),
+        "primary_color": branding.get("primary_color"),
+        "logo_url": f"/api/tenant/{account['account_id']}/logo" if branding.get("logo_path") else None,
+    }
+
+
+async def _hospital_cards(query: dict) -> List[dict]:
+    accounts = await db.accounts.find(query, ACCOUNT_PROJECTION).to_list(500)
+    ids = [a["account_id"] for a in accounts]
+    doctors = await db.users.find({"role": "doctor", "account_id": {"$in": ids}, "email": {"$ne": ADMIN_EMAIL}},
+                                  {"_id": 0, "user_id": 1, "account_id": 1, "specialty": 1}).to_list(5000)
+    published = {a["doctor_user_id"] for a in await db.doctor_availability.find(
+        {"weekly": {"$ne": []}}, {"_id": 0, "doctor_user_id": 1}).to_list(5000)}
+    return [_hospital_card(a, [d for d in doctors if d["account_id"] == a["account_id"]], published) for a in accounts]
+
+
+@api.get("/care/hospitals")
+async def list_hospitals(q: Optional[str] = None, city: Optional[str] = None, specialty: Optional[str] = None,
+                         user=Depends(get_current_user)):
+    query = {"listed_in_app": True, "status": {"$ne": "suspended"}, "type": {"$in": list(LISTABLE_TYPES)}}
+    if city:
+        query["city"] = {"$regex": re.escape(city), "$options": "i"}
+    cards = await _hospital_cards(query)
+    if q:
+        needle = q.lower()
+        cards = [c for c in cards if needle in c["name"].lower() or needle in c["legal_name"].lower()]
+    if specialty:
+        needle = specialty.lower()
+        cards = [c for c in cards if any(needle in s.lower() for s in c["specialties"])]
+    mine = user.get("account_id")
+    for c in cards:
+        c["is_my_hospital"] = c["account_id"] == mine
+    cards.sort(key=lambda c: (not c["is_my_hospital"], -c["bookable_doctor_count"], c["name"]))
+    return cards
+
+
+async def _set_active_hospital(user: dict, account_id: Optional[str]):
+    """One active hospital at a time: doctors from any other hospital lose access."""
+    update = {"account_id": account_id, "hospital_linked_at": iso()}
+    if user.get("account_id") != account_id:
+        update["account_role"] = "member" if account_id else None
+    if user.get("assigned_doctor_user_id"):
+        doctor = await db.users.find_one({"user_id": user["assigned_doctor_user_id"]}, {"_id": 0, "account_id": 1})
+        if (doctor or {}).get("account_id") and doctor["account_id"] != account_id:
+            update.update(assigned_doctor_user_id=None, assigned_by="patient", assigned_at=iso())
+    others = [d["user_id"] for d in await db.users.find(
+        {"role": "doctor", "account_id": {"$nin": [None, account_id]}}, {"_id": 0, "user_id": 1}).to_list(5000)]
+    if others:
+        await db.care_grants.update_many(
+            {"patient_user_id": user["user_id"], "doctor_user_id": {"$in": others}, "revoked": False},
+            {"$set": {"revoked": True, "revoked_at": iso(), "revoked_reason": "Patient changed hospital"}})
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": update})
+    user.update(update)
+
+
+@api.get("/profile/hospital")
+async def my_hospital_link(user=Depends(get_current_user)):
+    hospital = None
+    if user.get("account_id"):
+        cards = await _hospital_cards({"account_id": user["account_id"]})
+        hospital = cards[0] if cards else None
+    doctor = await db.users.find_one({"user_id": user.get("assigned_doctor_user_id") or "-"},
+                                     {"_id": 0, "user_id": 1, "name": 1, "specialty": 1, "account_id": 1})
+    return {"hospital": hospital, "doctor": doctor, "linked_at": user.get("hospital_linked_at")}
+
+
+@api.put("/profile/hospital")
+async def choose_hospital(body: HospitalChoice, user=Depends(get_current_user)):
+    if user.get("role") != "patient":
+        raise HTTPException(status_code=403, detail="Only patients choose a hospital")
+    account_id = body.account_id.upper() if body.account_id else None
+    if account_id:
+        account = await db.accounts.find_one({"account_id": account_id, "listed_in_app": True,
+                                              "status": {"$ne": "suspended"}}, {"_id": 0, "account_id": 1})
+        if not account:
+            raise HTTPException(status_code=404, detail="That hospital is not taking patients through the app")
+    await _set_active_hospital(user, account_id)
+    return await my_hospital_link(user)
+
+
+@api.patch("/account/listing")
+async def update_my_listing(body: ListingPatch, user=Depends(require_account_admin)):
+    update = body.model_dump(exclude_none=True)
+    if update:
+        update["updated_at"] = iso()
+        await db.accounts.update_one({"account_id": user["account_id"]}, {"$set": update})
+    return await get_account_or_404(user["account_id"])
+
+
+# ---------- Pharmacy portal ----------
+SPONSOR_DAYS = 30
+SPONSOR_TIERS = {
+    "bronze": {"label": "Bronze", "price_sar": 500.0, "rank": 3,
+               "perks": ["Sponsored badge on your listing", "Shown above unsponsored pharmacies"]},
+    "silver": {"label": "Silver", "price_sar": 1200.0, "rank": 2,
+               "perks": ["Everything in Bronze", "Placed above Bronze sponsors", "Suggested on refill reminders"]},
+    "gold": {"label": "Gold", "price_sar": 2500.0, "rank": 1,
+             "perks": ["Everything in Silver", "Top placement in the marketplace", "Featured first on refills"]},
+}
+PORTAL_TRANSITIONS = {
+    "handed_off": ("confirmed", "rejected"),
+    "awaiting_pharmacist_verification": ("confirmed", "rejected"),
+    "confirmed": ("ready_for_pickup", "out_for_delivery", "rejected"),
+    "ready_for_pickup": ("completed",),
+    "out_for_delivery": ("completed",),
+}
+ORDER_NOTICES = {
+    "confirmed": ("Your pharmacy order was accepted", "The pharmacist accepted your order and is preparing it."),
+    "rejected": ("Your pharmacy order was not accepted", "The pharmacy could not fill this order."),
+    "ready_for_pickup": ("Your order is ready for pickup", "Your order is ready at the branch."),
+    "out_for_delivery": ("Your order is on its way", "Your order has left the pharmacy."),
+    "completed": ("Your order is complete", "The pharmacy marked your order as handed over."),
+}
+
+
+class PharmacyApplyIn(BaseModel):
+    pharmacy_name: str = Field(min_length=2, max_length=120)
+    city: str = Field(min_length=2, max_length=80)
+    sfda_license: str = Field(min_length=3, max_length=60)
+    phone: str = Field(default="", max_length=30)
+    name: str = Field(min_length=1, max_length=120)
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=6, max_length=128)
+
+
+class PharmacyStaffIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: str = Field(min_length=3, max_length=254)
+
+
+class ReasonIn(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
+class OrderStatusIn(BaseModel):
+    status: str = Field(pattern="^(confirmed|rejected|ready_for_pickup|out_for_delivery|completed)$")
+    note: str = Field(default="", max_length=500)
+
+
+class OrderMessageIn(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+class SponsorRequestIn(BaseModel):
+    tier: str = Field(pattern="^(bronze|silver|gold)$")
+
+
+class MarkPaidIn(BaseModel):
+    reference: str = Field(default="", max_length=120)
+
+
+def _valid_email(email: str) -> str:
+    email = email.strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address")
+    return email
+
+
+async def require_pharmacist(user=Depends(get_current_user)):
+    if user.get("role") != "pharmacist":
+        raise HTTPException(status_code=403, detail="Pharmacy access required")
+    if not user.get("pharmacy_id"):
+        raise HTTPException(status_code=403, detail="Your pharmacy is waiting for approval")
+    return user
+
+
+async def _portal_order(order_id: str, user: dict) -> dict:
+    order = await db.orders.find_one({"order_id": order_id, "pharmacy_id": user["pharmacy_id"]}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+@api.post("/pharmacy-portal/apply")
+async def apply_as_pharmacy(body: PharmacyApplyIn, request: Request):
+    email = _valid_email(body.email)
+    ip_key = f"pharmacy-apply:{client_ip(request)}"
+    row = await db.login_attempts.find_one({"identifier": ip_key}, {"_id": 0})
+    if row and row.get("window_start", "") >= iso(now_utc() - timedelta(hours=1)) and row.get("count", 0) >= 5:
+        raise HTTPException(status_code=429, detail="Too many applications from this network. Try again later.")
+    if row and row.get("window_start", "") >= iso(now_utc() - timedelta(hours=1)):
+        await db.login_attempts.update_one({"identifier": ip_key}, {"$inc": {"count": 1}})
+    else:
+        await db.login_attempts.update_one({"identifier": ip_key}, {"$set": {"window_start": iso(), "count": 1}},
+                                           upsert=True)
+    if await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1}):
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    await db.users.insert_one({
+        "user_id": user_id, "email": email, "name": body.name.strip(), "password_hash": hash_password(body.password),
+        "picture": None, "role": "pharmacist", "pharmacy_id": None, "pharmacy_role": "owner",
+        "clinician_requested": False, "sharing_enabled": False, "assigned_doctor_user_id": None,
+        "onboarding_completed": True, "account_id": None, "created_at": iso(),
+    })
+    application = {
+        "application_id": f"papp_{uuid.uuid4().hex[:12]}", "user_id": user_id, "email": email,
+        "contact_name": body.name.strip(), "pharmacy_name": body.pharmacy_name.strip(), "city": body.city.strip(),
+        "sfda_license": body.sfda_license.strip(), "phone": body.phone.strip(), "status": "pending",
+        "created_at": iso(),
+    }
+    await db.pharmacy_applications.insert_one(dict(application))
+    return {"application_id": application["application_id"], "status": "pending"}
+
+
+@api.get("/pharmacy-portal/me")
+async def pharmacy_portal_me(user=Depends(get_current_user)):
+    if user.get("role") != "pharmacist":
+        raise HTTPException(status_code=403, detail="Pharmacy access required")
+    if not user.get("pharmacy_id"):
+        application = await db.pharmacy_applications.find_one({"user_id": user["user_id"]}, {"_id": 0},
+                                                              sort=[("created_at", -1)])
+        return {"status": (application or {}).get("status", "pending"), "application": application, "pharmacy": None}
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": user["pharmacy_id"]}, {"_id": 0})
+    counts = {s["_id"]: s["n"] for s in await db.orders.aggregate([
+        {"$match": {"pharmacy_id": user["pharmacy_id"]}}, {"$group": {"_id": "$status", "n": {"$sum": 1}}}
+    ]).to_list(50)}
+    return {"status": "approved", "pharmacy": {**_pharmacy_card(pharmacy or {}), "stats": (pharmacy or {}).get("stats")},
+            "pharmacy_role": user.get("pharmacy_role"), "order_counts": counts}
+
+
+@api.get("/pharmacy-portal/orders")
+async def pharmacy_portal_orders(view: str = Query("open", pattern="^(open|done|all)$"),
+                                 user=Depends(require_pharmacist)):
+    query = {"pharmacy_id": user["pharmacy_id"]}
+    if view == "open":
+        query["status"] = {"$in": list(PORTAL_TRANSITIONS)}
+    elif view == "done":
+        query["status"] = {"$nin": list(PORTAL_TRANSITIONS)}
+    orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    patients = {u["user_id"]: u for u in await db.users.find(
+        {"user_id": {"$in": list({o["user_id"] for o in orders})}}, {"_id": 0, "user_id": 1, "name": 1}).to_list(500)}
+    rx_ids = [o["prescription_id"] for o in orders if o.get("prescription_id")]
+    prescriptions = {p["prescription_id"]: p for p in await db.prescriptions.find(
+        {"prescription_id": {"$in": rx_ids}}, {"_id": 0, "prescription_id": 1, "image_path": 1,
+                                               "verification_status": 1, "source": 1}).to_list(500)}
+    unread = {m["_id"]: m["n"] for m in await db.order_messages.aggregate([
+        {"$match": {"order_id": {"$in": [o["order_id"] for o in orders]}, "sender": "patient", "read_by_pharmacy": False}},
+        {"$group": {"_id": "$order_id", "n": {"$sum": 1}}}]).to_list(500)}
+    for o in orders:
+        o["patient_name"] = (patients.get(o["user_id"]) or {}).get("name") or "Patient"
+        rx = prescriptions.get(o.get("prescription_id")) or {}
+        o["prescription"] = {"has_image": bool(rx.get("image_path")), "verification_status": rx.get("verification_status"),
+                             "source": rx.get("source")} if rx else None
+        o["allowed_next"] = list(PORTAL_TRANSITIONS.get(o["status"], ()))
+        o["unread_messages"] = unread.get(o["order_id"], 0)
+    return orders
+
+
+@api.post("/pharmacy-portal/orders/{order_id}/status")
+async def pharmacy_set_order_status(order_id: str, body: OrderStatusIn, request: Request,
+                                    user=Depends(require_pharmacist)):
+    order = await _portal_order(order_id, user)
+    if body.status not in PORTAL_TRANSITIONS.get(order["status"], ()):
+        raise HTTPException(status_code=409, detail=f"An order that is '{order['status']}' cannot move to '{body.status}'")
+    if body.status == "rejected" and not body.note.strip():
+        raise HTTPException(status_code=422, detail="Tell the patient why the order can't be filled")
+    headline, text = ORDER_NOTICES[body.status]
+    note = body.note.strip() or text
+    entry = {"status": body.status, "at": iso(), "note": note, "by": user["name"]}
+    await db.orders.update_one({"order_id": order_id}, {"$set": {"status": body.status, "updated_at": iso()},
+                                                        "$push": {"status_history": entry}})
+    pharmacy_name = (order.get("pharmacy_snapshot") or {}).get("name_en") or "Your pharmacy"
+    await db.alerts.insert_one({
+        "alert_id": f"alert_{uuid.uuid4().hex[:12]}", "user_id": order["user_id"], "profile_id": order["profile_id"],
+        "type": "pharmacy", "severity": "warning" if body.status == "rejected" else "info",
+        "message": f"{pharmacy_name}: {headline.lower()}", "order_id": order_id, "read": False, "created_at": iso(),
+    })
+    patient = await db.users.find_one({"user_id": order["user_id"]}, {"_id": 0, "email": 1, "name": 1})
+    if patient and patient.get("email"):
+        subject, html = notice_email(patient.get("name") or "there", headline, f"{pharmacy_name}: {note}",
+                                     f"{_app_origin(request)}/pharmacy/orders", "View my order")
+        _send_in_background(order["user_id"], patient["email"], subject, html)
+    return await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+
+
+async def _order_thread(order_id: str, reader: str):
+    field = "read_by_pharmacy" if reader == "pharmacy" else "read_by_patient"
+    await db.order_messages.update_many({"order_id": order_id, field: False}, {"$set": {field: True}})
+    return await db.order_messages.find({"order_id": order_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+
+
+async def _post_order_message(order: dict, sender: str, name: str, text: str) -> dict:
+    message = {"message_id": f"omsg_{uuid.uuid4().hex[:12]}", "order_id": order["order_id"], "sender": sender,
+               "sender_name": name, "text": text.strip(), "read_by_pharmacy": sender == "pharmacy",
+               "read_by_patient": sender == "patient", "created_at": iso()}
+    await db.order_messages.insert_one(dict(message))
+    if sender == "pharmacy":
+        await db.alerts.insert_one({
+            "alert_id": f"alert_{uuid.uuid4().hex[:12]}", "user_id": order["user_id"], "profile_id": order["profile_id"],
+            "type": "pharmacy", "severity": "info",
+            "message": f"{(order.get('pharmacy_snapshot') or {}).get('name_en') or 'Your pharmacy'} sent you a message about your order",
+            "order_id": order["order_id"], "read": False, "created_at": iso(),
+        })
+    message.pop("_id", None)
+    return message
+
+
+@api.get("/pharmacy-portal/orders/{order_id}/messages")
+async def pharmacy_order_messages(order_id: str, user=Depends(require_pharmacist)):
+    await _portal_order(order_id, user)
+    return await _order_thread(order_id, "pharmacy")
+
+
+@api.post("/pharmacy-portal/orders/{order_id}/messages")
+async def pharmacy_send_message(order_id: str, body: OrderMessageIn, user=Depends(require_pharmacist)):
+    order = await _portal_order(order_id, user)
+    return await _post_order_message(order, "pharmacy", user["name"], body.text)
+
+
+@api.get("/pharmacy-portal/orders/{order_id}/prescription-image")
+async def pharmacy_prescription_image(order_id: str, user=Depends(require_pharmacist)):
+    order = await _portal_order(order_id, user)
+    rx = await db.prescriptions.find_one({"prescription_id": order.get("prescription_id") or "-"}, {"_id": 0})
+    if not rx or not rx.get("image_path"):
+        raise HTTPException(status_code=404, detail="This order has no prescription image")
+    data, content_type = get_object(rx["image_path"])
+    return Response(content=data, media_type=rx.get("content_type") or content_type, headers={"Cache-Control": "no-store"})
+
+
+@api.get("/pharmacy/orders/{order_id}/messages")
+async def patient_order_messages(order_id: str, user=Depends(get_current_user)):
+    await get_order(order_id, user)
+    return await _order_thread(order_id, "patient")
+
+
+@api.post("/pharmacy/orders/{order_id}/messages")
+async def patient_send_message(order_id: str, body: OrderMessageIn, user=Depends(get_current_user)):
+    order = await get_order(order_id, user)
+    if not order.get("pharmacy_id"):
+        raise HTTPException(status_code=409, detail="This order has no pharmacy to message")
+    return await _post_order_message(order, "patient", user["name"], body.text)
+
+
+@api.get("/pharmacy-portal/sponsorship")
+async def pharmacy_sponsorship(user=Depends(require_pharmacist)):
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": user["pharmacy_id"]}, {"_id": 0}) or {}
+    sponsorship = pharmacy.get("sponsorship") or {}
+    requests = await db.sponsorship_requests.find({"pharmacy_id": user["pharmacy_id"]}, {"_id": 0}
+                                                  ).sort("created_at", -1).to_list(50)
+    since = iso(now_utc() - timedelta(days=30))
+    orders_30d = await db.orders.count_documents({"pharmacy_id": user["pharmacy_id"], "created_at": {"$gte": since}})
+    return {"tiers": [{"key": k, **v, "days": SPONSOR_DAYS} for k, v in SPONSOR_TIERS.items()],
+            "current": {"tier": sponsorship.get("tier"), "active_until": sponsorship.get("active_until"),
+                        "active": _is_sponsored(pharmacy)},
+            "requests": requests, "payment_provider_connected": False,
+            "stats": {"impressions": (pharmacy.get("stats") or {}).get("impressions", 0), "orders_30d": orders_30d}}
+
+
+@api.post("/pharmacy-portal/sponsorship/requests")
+async def request_sponsorship(body: SponsorRequestIn, user=Depends(require_pharmacist)):
+    if await db.sponsorship_requests.find_one({"pharmacy_id": user["pharmacy_id"], "status": "awaiting_payment"}):
+        raise HTTPException(status_code=409, detail="You already have a sponsorship waiting for payment")
+    tier = SPONSOR_TIERS[body.tier]
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": user["pharmacy_id"]}, {"_id": 0, "name_en": 1})
+    request_doc = {
+        "request_id": f"spr_{uuid.uuid4().hex[:10]}", "reference": f"SP-{uuid.uuid4().hex[:6].upper()}",
+        "pharmacy_id": user["pharmacy_id"], "pharmacy_name": (pharmacy or {}).get("name_en"), "tier": body.tier,
+        "tier_label": tier["label"], "amount_sar": tier["price_sar"], "days": SPONSOR_DAYS,
+        "status": "awaiting_payment", "payment_provider": None, "requested_by": user["user_id"],
+        "requested_by_name": user["name"], "created_at": iso(),
+    }
+    await db.sponsorship_requests.insert_one(dict(request_doc))
+    return request_doc
+
+
+@api.post("/pharmacy-portal/sponsorship/requests/{request_id}/cancel")
+async def cancel_sponsorship_request(request_id: str, user=Depends(require_pharmacist)):
+    result = await db.sponsorship_requests.update_one(
+        {"request_id": request_id, "pharmacy_id": user["pharmacy_id"], "status": "awaiting_payment"},
+        {"$set": {"status": "cancelled", "closed_at": iso()}})
+    if not result.matched_count:
+        raise HTTPException(status_code=409, detail="Only a request waiting for payment can be cancelled")
+    return {"ok": True}
+
+
+@api.get("/admin/pharmacies")
+async def admin_pharmacies(admin=Depends(require_admin)):
+    pharmacies = await db.pharmacies.find({}, {"_id": 0}).sort("name_en", 1).to_list(500)
+    staff = await db.users.find({"role": "pharmacist", "pharmacy_id": {"$ne": None}},
+                                {"_id": 0, "user_id": 1, "name": 1, "email": 1, "pharmacy_id": 1, "pharmacy_role": 1,
+                                 "password_hash": 1}).to_list(5000)
+    out = []
+    for p in pharmacies:
+        card = _pharmacy_card(p)
+        card["sponsorship"] = p.get("sponsorship") or {}
+        card["staff"] = [{"user_id": s["user_id"], "name": s["name"], "email": s["email"],
+                          "pharmacy_role": s.get("pharmacy_role"),
+                          "status": "active" if s.get("password_hash") else "invited"}
+                         for s in staff if s["pharmacy_id"] == p["pharmacy_id"]]
+        out.append(card)
+    return out
+
+
+@api.post("/admin/pharmacies/{pharmacy_id}/staff")
+async def invite_pharmacy_staff(pharmacy_id: str, body: PharmacyStaffIn, request: Request, admin=Depends(require_admin)):
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": pharmacy_id}, {"_id": 0})
+    if not pharmacy:
+        raise HTTPException(status_code=404, detail="Pharmacy not found")
+    email = _valid_email(body.email)
+    existing = await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1, "role": 1, "pharmacy_id": 1})
+    if existing:
+        if existing.get("role") != "pharmacist" or existing.get("pharmacy_id") not in (None, pharmacy_id):
+            raise HTTPException(status_code=409, detail="This email already belongs to another account")
+        await db.users.update_one({"user_id": existing["user_id"]}, {"$set": {"pharmacy_id": pharmacy_id}})
+        return {"user_id": existing["user_id"], "invited": False, "linked": True}
+    has_staff = await db.users.count_documents({"role": "pharmacist", "pharmacy_id": pharmacy_id})
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    await db.users.insert_one({
+        "user_id": user_id, "email": email, "name": body.name.strip(), "picture": None, "role": "pharmacist",
+        "pharmacy_id": pharmacy_id, "pharmacy_role": "staff" if has_staff else "owner", "clinician_requested": False,
+        "sharing_enabled": False, "assigned_doctor_user_id": None, "onboarding_completed": True, "account_id": None,
+        "invited_at": iso(), "invited_by": admin["user_id"], "created_at": iso(),
+    })
+    token = await _issue_password_token(user_id, email, 7 * 24 * 60)
+    subject, html = account_invite_email(body.name.strip(), pharmacy.get("name_en") or "your pharmacy",
+                                         f"{_app_origin(request)}/auth/reset?token={token}&next=pharmacy")
+    _send_in_background(user_id, email, subject, html)
+    return {"user_id": user_id, "invited": True, "linked": False}
+
+
+@api.delete("/admin/pharmacies/{pharmacy_id}/staff/{user_id}")
+async def remove_pharmacy_staff(pharmacy_id: str, user_id: str, admin=Depends(require_admin)):
+    result = await db.users.update_one({"user_id": user_id, "role": "pharmacist", "pharmacy_id": pharmacy_id},
+                                       {"$set": {"pharmacy_id": None, "pharmacy_removed_at": iso()}})
+    if not result.matched_count:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    return {"ok": True}
+
+
+@api.get("/admin/pharmacy-applications")
+async def admin_pharmacy_applications(status: str = Query("pending", pattern="^(pending|approved|rejected|all)$"),
+                                      admin=Depends(require_admin)):
+    query = {} if status == "all" else {"status": status}
+    return await db.pharmacy_applications.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+async def _open_application(application_id: str) -> dict:
+    application = await db.pharmacy_applications.find_one({"application_id": application_id, "status": "pending"},
+                                                           {"_id": 0})
+    if not application:
+        raise HTTPException(status_code=409, detail="This application was already handled")
+    return application
+
+
+@api.post("/admin/pharmacy-applications/{application_id}/approve")
+async def approve_pharmacy(application_id: str, request: Request, admin=Depends(require_admin)):
+    application = await _open_application(application_id)
+    pharmacy_id = f"ph_{uuid.uuid4().hex[:10]}"
+    await db.pharmacies.insert_one({
+        "pharmacy_id": pharmacy_id, "name_en": application["pharmacy_name"], "name_ar": application["pharmacy_name"],
+        "sfda_license": application["sfda_license"], "moh_license": None, "cr_number": None,
+        "fulfilment_mode": "in_app", "handoff_url_template": None,
+        "sponsorship": {"tier": None, "rank": None, "active_until": None},
+        "branches": [{"branch_id": f"br_{uuid.uuid4().hex[:8]}", "city": application["city"], "lat": None, "lng": None,
+                      "delivery_zones": [], "hours": "", "phone": application.get("phone")}],
+        "active": True, "source": "portal_application", "created_at": iso(),
+    })
+    await db.users.update_one({"user_id": application["user_id"]},
+                              {"$set": {"pharmacy_id": pharmacy_id, "pharmacy_role": "owner"}})
+    await db.pharmacy_applications.update_one({"application_id": application_id},
+                                              {"$set": {"status": "approved", "pharmacy_id": pharmacy_id,
+                                                        "decided_by": admin["user_id"], "decided_at": iso()}})
+    subject, html = notice_email(application["contact_name"], "Your pharmacy is approved",
+                                 f"{application['pharmacy_name']} is now live on the marketplace. Sign in to manage orders.",
+                                 f"{_app_origin(request)}/auth/pharmacy", "Open the pharmacy portal")
+    _send_in_background(application["user_id"], application["email"], subject, html)
+    return {"application_id": application_id, "status": "approved", "pharmacy_id": pharmacy_id}
+
+
+@api.post("/admin/pharmacy-applications/{application_id}/reject")
+async def reject_pharmacy(application_id: str, body: ReasonIn, admin=Depends(require_admin)):
+    await _open_application(application_id)
+    await db.pharmacy_applications.update_one({"application_id": application_id},
+                                              {"$set": {"status": "rejected", "reason": body.reason.strip(),
+                                                        "decided_by": admin["user_id"], "decided_at": iso()}})
+    return {"application_id": application_id, "status": "rejected"}
+
+
+@api.get("/admin/sponsorship-requests")
+async def admin_sponsorship_requests(status: str = Query("awaiting_payment", pattern="^(awaiting_payment|paid|declined|cancelled|all)$"),
+                                     admin=Depends(require_admin)):
+    query = {} if status == "all" else {"status": status}
+    return await db.sponsorship_requests.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@api.post("/admin/sponsorship-requests/{request_id}/mark-paid")
+async def mark_sponsorship_paid(request_id: str, body: MarkPaidIn, admin=Depends(require_admin)):
+    req = await db.sponsorship_requests.find_one({"request_id": request_id, "status": "awaiting_payment"}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=409, detail="This request is not waiting for payment")
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": req["pharmacy_id"]}, {"_id": 0}) or {}
+    current = pharmacy.get("sponsorship") or {}
+    start = now_utc()
+    if _is_sponsored(pharmacy) and current.get("tier") == req["tier"] and current.get("active_until"):
+        start = max(start, datetime.fromisoformat(current["active_until"]))
+    active_until = iso(start + timedelta(days=req["days"]))
+    await db.pharmacies.update_one({"pharmacy_id": req["pharmacy_id"]}, {"$set": {"sponsorship": {
+        "tier": req["tier"], "rank": SPONSOR_TIERS[req["tier"]]["rank"], "active_until": active_until,
+        "started_at": iso(), "request_id": request_id}}})
+    await db.sponsorship_requests.update_one({"request_id": request_id}, {"$set": {
+        "status": "paid", "payment_provider": "manual", "payment_reference": body.reference.strip(),
+        "active_until": active_until, "confirmed_by": admin["user_id"], "closed_at": iso()}})
+    return await db.sponsorship_requests.find_one({"request_id": request_id}, {"_id": 0})
+
+
+@api.post("/admin/sponsorship-requests/{request_id}/decline")
+async def decline_sponsorship(request_id: str, body: ReasonIn, admin=Depends(require_admin)):
+    result = await db.sponsorship_requests.update_one(
+        {"request_id": request_id, "status": "awaiting_payment"},
+        {"$set": {"status": "declined", "reason": body.reason.strip(), "closed_at": iso()}})
+    if not result.matched_count:
+        raise HTTPException(status_code=409, detail="This request is not waiting for payment")
+    return {"ok": True}
+
 
 
 app.include_router(api)

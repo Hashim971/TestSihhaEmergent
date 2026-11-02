@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { toast } from "sonner";
 import { CalendarDays, PhoneCall, Stethoscope, Search, CheckCircle2 } from "lucide-react";
 import { UpcomingVisits } from "../components/UpcomingVisits";
+import { ShareConsentDialog } from "../components/ShareConsentDialog";
+import { useAuth } from "../context/AuthContext";
 
 export default function BookVisit() {
   const [params] = useSearchParams();
@@ -16,11 +18,15 @@ export default function BookVisit() {
   const [reason, setReason] = useState(params.get("reason") || "");
   const [booking, setBooking] = useState(false);
   const [visitsKey, setVisitsKey] = useState(0);
+  const [pending, setPending] = useState(null);
+  const { user, setUser } = useAuth();
   const reportId = params.get("report");
+  const hospitalId = params.get("hospital");
+  const hospitalName = params.get("hospital_name");
 
   const loadDoctors = (s, c) => {
     setDoctors(null);
-    api.get("/booking/doctors", { params: { specialty: s || undefined, city: c || undefined } })
+    api.get("/booking/doctors", { params: { specialty: s || undefined, city: c || undefined, account_id: hospitalId || undefined } })
       .then(({ data }) => setDoctors(data)).catch(() => setDoctors([]));
   };
 
@@ -34,17 +40,20 @@ export default function BookVisit() {
     if (data.slots.length === 0) toast.info(`${doctor.name} has no open slots in the next two weeks`);
   };
 
-  const book = async (slot) => {
+  const book = async (slot, shareRecord) => {
     setBooking(true);
     try {
       const { data } = await api.post("/booking", {
         doctor_user_id: selected.user_id, slot_start: slot.start,
-        reason_for_visit: reason, report_id: reportId || null,
+        reason_for_visit: reason, report_id: reportId || null, share_record: shareRecord,
       });
+      if (shareRecord && selected.account_id) setUser({ ...user, account_id: selected.account_id });
+      setPending(null);
       toast.success(`Booked with ${data.doctor_name} — ${data.slot_label}`);
       setVisitsKey((k) => k + 1);
       navigate("/dashboard");
     } catch (e) {
+      setPending(null);
       toast.error(typeof e?.response?.data?.detail === "string"
         ? e.response.data.detail : "Could not book that time");
       if (selected) pick(selected);
@@ -61,12 +70,20 @@ export default function BookVisit() {
   return (
     <div className="space-y-6 fade-up max-w-4xl" data-testid="book-visit-page">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Book a visit</h1>
+        <h1 className="text-3xl font-bold tracking-tight">{hospitalName ? `Doctors at ${hospitalName}` : "Book a visit"}</h1>
         <p className="text-ink-soft mt-1">
-          Your own doctor comes first. If your screening points at another specialty, you can pick a clinician who
-          covers it — booking with them lets them read your record for this visit.
+          {hospitalName
+            ? "Pick a doctor and a time. You'll be asked whether to share your health record before the booking is confirmed."
+            : "Your own doctor comes first. You'll be asked whether to share your health record with any other clinician you book."}
         </p>
+        <Link to={`/find-care${reportId ? `?report=${reportId}` : ""}`} className="text-sm text-forest underline mt-2 inline-block" data-testid="booking-change-hospital-link">
+          {hospitalName ? "Choose a different hospital" : "Browse hospitals instead"}
+        </Link>
       </div>
+      {pending && (
+        <ShareConsentDialog doctor={selected} slot={pending} hospitalName={hospitalName} busy={booking}
+          onClose={() => setPending(null)} onConfirm={(share) => book(pending, share)} />
+      )}
 
       <UpcomingVisits reloadKey={visitsKey} />
 
@@ -139,7 +156,7 @@ export default function BookVisit() {
                     </p>
                     <div className="flex flex-wrap gap-2">
                       {daySlots.map((slot) => (
-                        <button key={slot.start} onClick={() => book(slot)} disabled={booking}
+                        <button key={slot.start} onClick={() => (selected.is_my_doctor ? book(slot, true) : setPending(slot))} disabled={booking}
                           data-testid={`slot-${slot.start}`}
                           className="px-3 py-1.5 rounded-full border border-line text-xs font-semibold hover:bg-forest hover:text-white hover:border-forest transition-colors">
                           {slot.local_time}
@@ -149,7 +166,7 @@ export default function BookVisit() {
                   </div>
                 ))}
                 <p className="text-xs text-ink-soft flex items-center gap-1.5">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-forest" /> Picking a time confirms the visit straight away.
+                  <CheckCircle2 className="h-3.5 w-3.5 text-forest" /> Pick a time, then confirm whether to share your record.
                 </p>
               </div>
             )}

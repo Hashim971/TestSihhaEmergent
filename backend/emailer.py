@@ -200,3 +200,22 @@ def password_reset_email(name: str, link: str) -> tuple[str, str]:
         '</td></tr></table></td></tr></table>'
     )
     return subject, html
+
+
+def notice_email(name: str, headline: str, body: str, link: str, cta: str) -> tuple[str, str]:
+    brand = escape(EMAIL_FROM_NAME)
+    html = (
+        '<table role="presentation" width="100%" style="background:#F6F1E7"><tr><td style="padding:32px">'
+        '<table role="presentation" width="100%" style="max-width:520px;margin:0 auto;background:#ffffff;'
+        'border-radius:16px"><tr><td style="padding:32px;font-family:Arial,sans-serif;color:#1F2A24">'
+        f'<p style="font-size:20px;font-weight:bold;color:#1F4D3A;margin:0 0 16px">{brand}</p>'
+        f'<p style="margin:0 0 12px">Hi {escape(name)},</p>'
+        f'<p style="margin:0 0 8px;font-weight:bold">{escape(headline)}</p>'
+        f'<p style="margin:0 0 24px">{escape(body)}</p>'
+        f'<p style="margin:0 0 24px"><a href="{escape(link, quote=True)}" style="background:#1F4D3A;color:#ffffff;'
+        f'padding:12px 24px;border-radius:999px;text-decoration:none;font-weight:bold">{escape(cta)}</a></p>'
+        f'<p style="margin:16px 0 0;font-size:12px;color:#8A968F">Sent by {brand}. We never ask for your password '
+        'or card details by email.</p>'
+        '</td></tr></table></td></tr></table>'
+    )
+    return f"{headline} — {EMAIL_FROM_NAME}", html

@@ -1,0 +1,49 @@
+{
+  "summary": "Retest of the iteration_17 fixes. Monthly reports (one curl run plus a DB check): POST /api/cron/monthly-reports with the correct bearer, a new X-Webhook-Id and body {} returns 200 {accepted:true}. With last_report_sent unset, Al Noor (only admin dr.layla@sihha.ai, which cannot receive mail) was NOT updated. Eastern (no admins) was not updated. Jeddah, already at 2026-10, was skipped. The log reads 'Usage report not delivered to dr.layla@sihha.ai (user_b1000ae5aad6)'. A second run with every account at 2026-10 added no new log lines, so dedupe works. last_report_sent=2026-10 has been restored on all 3 sample accounts. Alerts panel at 390px: x=16 to 374 in both AR and EN, scrollWidth 390, no overflow. Desktop: AR x=196 to 516, EN x=1404 to 1724, both inside 1920. Toasts appear bottom-left in AR (x=32 to 388) and bottom-right in EN (x=1532 to 1888). demo-alert-save-btn can be clicked straight after an error toast in both languages. Arabic coverage is much improved: doctor dashboard 46 AR vs 32 EN nodes (mostly names and interpolated alert labels), accounts list fully translated (Subscribed/Trial badges, count line 'جارٍ العرض 3 من 3 حسابات'), demo requests page fully translated (title, nav, filter chips, badges, select options), workspace onboarding almost complete, medication form fully translated. Regression: typing works in AR, the input value survives AR→EN→AR→EN toggles, English mode shows 0 Arabic nodes, no page errors. Language was reset to English at the end.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/cron/monthly-reports", "issue": "Returns 400 'Invalid body' when there is no JSON body, even when X-Webhook-Id is present. Fine if the cron runner always sends a body; otherwise make the body optional when the header is present."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "LanguageContext translateAttrs", "issue": "Textarea placeholders are never translated. SKIP includes 'textarea' and el.closest(SKIP) matches the textarea itself, so the attribute pass skips it. Example: the demo requests notes placeholder 'Notes — call outcome, next step…' stays English even though it is in ar.json. Fix: only skip text-node translation inside textarea, not attribute translation on the textarea element.", "selector": "[data-testid='demo-requests-page'] textarea", "priority": "LOW"},
+      {"component": "Sonner toasts / English-mode language toggle (Arabic text)", "issue": "The toast uses sonner's default system-ui font stack, not IBM Plex Sans Arabic. In the test browser, Arabic toast text and the 'العربية' toggle label in EN mode render with disconnected glyphs. Fix: set the toast font to the Arabic font, e.g. html[lang=ar] [data-sonner-toast] { font-family: 'IBM Plex Sans Arabic', ... }, and apply the Arabic font to the toggle label.", "selector": "[data-sonner-toast]", "priority": "LOW"},
+      {"component": "Encounter briefing headline (RTL)", "issue": "When scrolled, the briefing headline appears clipped at the start ('nnual check-up with stable vitals...'), which looks like truncate/overflow in RTL. The account switcher in the AR sidebar also shows '...cialist Hospital'. Minor.", "selector": "[data-testid='account-switcher-current']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Remaining English in Arabic mode (data, names and dates excluded)", "issues": [
+        "Doctor dashboard: interpolated alert group labels ('2 screenings needing attention', '174 medication alerts', '14 appointment updates', '6 prescription alerts', '2 vital alerts', '1 refill alert'), the kind badges 'VITAL' / 'REFILL' and the date 'Monday, November 2'. The dictionary cannot match strings that contain counts; use t() with a template.",
+        "Encounter detail: 'MEDIUM PRIORITY' / 'LOW PRIORITY' badges (split nodes 'medium' + 'priority'), the trend label 'stable', 'recently added', '97% adherence ·', the 'Review & Sign' button, and the suggested-question chips 'Why was ... flagged?' (the RTL bidi also scrambles the trailing punctuation).",
+        "My Hospital / workspace overview: '+0 in the last 30 days' and '0 in the last 30 days' (ar.json has 'in the last 30 days' but the leading number blocks the lookup), and '1 doctors · 1 hospital admins'.",
+        "Workspace onboarding checklist items 3 and 8: 'A subdomain such as care.hospital.sa and someone in IT who can add one DNS record.' and 'A signed data processing agreement covering Saudi PDPL before real patient data is imported.'",
+        "Workspace features tab: 'Uses global (on)'. Import tab: a stray 'and'.",
+        "Landing: the AudienceTabs point 'AI health chat and screening with a clear next step' is untranslated. Trust chips are hospital names, which is fine by design.",
+        "Medication form: the pack-size placeholder 'e.g. 30' is untranslated.",
+        "Success toast 'Alerts go to <email>' stays English in AR (interpolated).",
+        "My Hospital / workspace report month uses the native <input type=month> picker, not a shadcn-style picker."
+      ]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Translate interpolated strings (counts, templates) with t() templates instead of relying on dictionary text matching: doctor alert group labels, 'N in the last 30 days', 'N doctors · N hospital admins', 'N% adherence', 'Alerts go to {email}'",
+    "Add the missing ar.json entries: priority badges, 'stable', 'recently added', 'Review & Sign', the 'Why was … flagged?' template, onboarding items 3 and 8, 'Uses global (on)', the AudienceTabs 'AI health chat and screening with a clear next step', 'e.g. 30'",
+    "Fix translateAttrs so textarea placeholders get translated",
+    "Set the Arabic font on sonner toasts",
+    "Clean up ar.json: about 78 garbage keys were captured from source code (e.g. line 84 '); toast.success(data.email ? `Alerts go to $' and line 1759 'placeholder=\\\"Notes…\\\" data-testid=')"
+  ],
+  "critical_code_review_comments": [
+    "ar.json has extraction artefacts: keys that contain JSX or JS fragments (data-testid=, toast., className=). They are harmless but noisy and will never match.",
+    "send_monthly_reports and _deliver_reset_email are now correct: per-month dedupe via last_report_sent != month, the account is only marked when at least one email was sent, and the log includes the kind and recipient.",
+    "LanguageContext lookup strips only edge punctuation, not numbers, so any string with a count is never translated."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (monthly report checks)", "frontend": "90% (all 4 fixes verified; remaining items are smaller Arabic gaps)"},
+  "seed_data_creation": "None. Temporarily unset last_report_sent on the sample accounts and then restored it to 2026-10 on all 3. Demo alert email restored to delivered+sihha-demo@resend.dev.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Cron needs a JSON body ({}) plus the bearer WEBHOOK_CRON_SECRET. The current report month is 2026-10 (system date is Nov 2026). Encounters with artifacts: enc_fc5e6d2f320f, enc_2cead3245352 (dr.layla). Workspace tabs use data-testid account-tab-{key}, not account-*-tab. The English-node counter skips names, emails and medicine names by design."
+}

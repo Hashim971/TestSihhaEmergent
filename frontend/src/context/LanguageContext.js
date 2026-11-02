@@ -5,7 +5,8 @@ import { usePlatform } from "./PlatformContext";
 const LangContext = createContext({ lang: "en", setLang: () => {}, t: (s) => s });
 const KEY = "sihha_lang";
 const ATTRS = ["placeholder", "title", "aria-label", "alt"];
-const SKIP = "script,style,textarea,code,[data-no-translate]";
+const SKIP = "script,style,code,[data-no-translate]";
+const TEXT_SKIP = "script,style,textarea,code,[data-no-translate]";
 
 const lower = Object.fromEntries(Object.entries(ar).map(([k, v]) => [k.toLowerCase(), v]));
 const EDGE = /^([\s·•:,.()\-–—+]*)(.*?)([\s·•:,.()\-–—]*)$/s;
@@ -25,7 +26,7 @@ const lookup = (english) => {
 function translateText(node, lang) {
   if (node.__ar !== undefined && node.nodeValue !== node.__ar) node.__en = node.nodeValue;
   const english = node.__en ?? node.nodeValue;
-  if (!node.parentElement || node.parentElement.closest(SKIP)) return;
+  if (!node.parentElement || node.parentElement.closest(TEXT_SKIP)) return;
   if (lang === "ar") {
     const translated = lookup(english);
     if (translated && node.nodeValue !== translated) {

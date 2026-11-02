@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import { CalendarDays, Plus, Stethoscope, ChevronRight } from "lucide-react";
+import { WeekView } from "../components/WeekView";
 
 const BADGE = {
   signed: { label: "Signed", cls: "bg-forest text-white" },
@@ -20,6 +21,7 @@ export default function DoctorSchedule() {
   const [form, setForm] = useState({ patient_user_id: "", scheduled_at: "", reason_for_visit: "" });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState("list");
 
   const load = async () => {
     api.get("/doctor/patients").then((p) => setPatients(p.data)).catch(() => toast.error("Could not load your patient panel"));
@@ -73,10 +75,22 @@ export default function DoctorSchedule() {
           </h1>
           <p className="text-ink-soft mt-1">Upcoming consultations and their pre-visit briefings.</p>
         </div>
-        <button onClick={() => setShowForm(!showForm)} data-testid="new-encounter-btn" className="btn-primary">
-          <Plus className="h-4 w-4" /> New Encounter
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-full border border-line p-1 bg-white">
+            {[["list", "List"], ["week", "Week"]].map(([k, label]) => (
+              <button key={k} onClick={() => setView(k)} data-testid={`schedule-view-${k}`}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium ${view === k ? "bg-forest text-white" : "text-ink-soft"}`}>{label}</button>
+            ))}
+          </div>
+          <button onClick={() => setShowForm(!showForm)} data-testid="new-encounter-btn" className="btn-primary">
+            <Plus className="h-4 w-4" /> New Encounter
+          </button>
+        </div>
       </div>
+
+      {view === "week" && !loading && (
+        <WeekView encounters={encounters} onOpen={(id) => navigate(`/doctor/encounters/${id}`)} />
+      )}
 
       {showForm && (
         <form onSubmit={create} className="card p-6 space-y-4" data-testid="new-encounter-form">
@@ -123,7 +137,7 @@ export default function DoctorSchedule() {
         </form>
       )}
 
-      <div className="space-y-3" data-testid="encounters-list">
+      <div className={`space-y-3 ${view === "week" ? "hidden" : ""}`} data-testid="encounters-list">
         {loading && (
           <div className="space-y-3" data-testid="encounters-loading">
             {[0, 1, 2].map((i) => (

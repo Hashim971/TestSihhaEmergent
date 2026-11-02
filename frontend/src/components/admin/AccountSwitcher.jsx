@@ -45,7 +45,7 @@ export function AccountSwitcher() {
         className={`w-full flex items-center gap-2 border rounded-lg px-3 py-2 bg-white text-sm ${open ? "border-forest ring-2 ring-sage" : "border-line hover:border-forest/40"}`}
         style={{ transition: "border-color 0.2s ease" }}>
         <Building2 className="h-4 w-4 text-ink-soft shrink-0" />
-        <span className="truncate flex-1 text-left font-medium" data-testid="account-switcher-current">
+        <span className="truncate flex-1 text-start font-medium" data-testid="account-switcher-current">
           {current?.name || "Choose an account"}
         </span>
         {current ? (

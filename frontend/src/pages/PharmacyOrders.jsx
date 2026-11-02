@@ -4,17 +4,10 @@ import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import { ReceiptText, ExternalLink, MapPin, BadgeCheck } from "lucide-react";
+import { ORDER_LABEL as LABEL } from "../lib/orderStatus";
+import { OrderThread } from "../components/pharmacy/OrderThread";
 
 const CANCELLABLE = ["draft", "awaiting_pharmacist_verification", "confirmed"];
-
-const LABEL = {
-  handed_off: "Handed to the pharmacy",
-  awaiting_pharmacist_verification: "Waiting on the pharmacist",
-  confirmed: "Confirmed by the pharmacy",
-  rejected: "Rejected by the pharmacy",
-  cancelled: "Cancelled",
-  draft: "Draft",
-};
 
 export default function PharmacyOrders() {
   const { activeProfile } = useAuth();
@@ -126,6 +119,7 @@ export default function PharmacyOrders() {
               </button>
             )}
           </div>
+          {order.pharmacy_id && <OrderThread base={`/pharmacy/orders/${order.order_id}`} me="patient" testid={`order-thread-${order.order_id}`} />}
         </div>
       ))}
     </div>

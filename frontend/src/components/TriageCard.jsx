@@ -49,11 +49,11 @@ export function TriageCard({ report, onRetriage }) {
           </a>
         ) : (
           <button
-            onClick={() => navigate(`/book?report=${report.report_id}` +
+            onClick={() => navigate(`/find-care?report=${report.report_id}` +
               `&specialty=${encodeURIComponent(d.recommended_specialty || "")}` +
               `&reason=${encodeURIComponent(d.suggested_reason_for_visit || "")}`)}
             data-testid="triage-book-btn" className="btn-primary">
-            <CalendarPlus className="h-4 w-4" /> Book a visit
+            <CalendarPlus className="h-4 w-4" /> Find a hospital & book
           </button>
         )}
       </div>

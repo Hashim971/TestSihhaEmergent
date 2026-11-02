@@ -4,6 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import YesNo from "../components/YesNo";
 import { MyDoctorCard } from "../components/MyDoctorCard";
+import { MyHospitalCard } from "../components/MyHospitalCard";
 import { ClinicianProfileCard } from "../components/ClinicianProfileCard";
 import { AvailabilityCard } from "../components/AvailabilityCard";
 import { Save, User, HeartPulse, Pill, Leaf } from "lucide-react";
@@ -82,6 +83,7 @@ export default function Settings() {
         </div>
       </div>
 
+      {user.role === "patient" && <MyHospitalCard />}
       {user.role === "patient" && <MyDoctorCard />}
       {user.role === "doctor" && <ClinicianProfileCard />}
       {user.role === "doctor" && <AvailabilityCard />}

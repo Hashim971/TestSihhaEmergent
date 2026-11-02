@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, Navigate, Outlet, useNavigate } from "react-router-dom";
-import { Building2, ToggleRight, UserCheck, Search, ArrowLeft, LogOut, ShieldCheck, Inbox } from "lucide-react";
+import { Building2, ToggleRight, UserCheck, Search, ArrowLeft, LogOut, ShieldCheck, Inbox, Store } from "lucide-react";
 import { LanguageToggle } from "../../components/LanguageToggle";
 import { useAuth } from "../../context/AuthContext";
 import { usePlatform } from "../../context/PlatformContext";
@@ -12,6 +12,7 @@ const nav = [
   { to: "/admin/flags", label: "Feature switches", icon: ToggleRight, testid: "admin-nav-flags" },
   { to: "/admin/demo-requests", label: "Demo requests", icon: Inbox, testid: "admin-nav-demo-requests" },
   { to: "/admin/assignments", label: "Doctor assignments", icon: UserCheck, testid: "admin-nav-assignments" },
+  { to: "/admin/pharmacies", label: "Pharmacies", icon: Store, testid: "admin-nav-pharmacies" },
 ];
 
 export default function AdminLayout() {

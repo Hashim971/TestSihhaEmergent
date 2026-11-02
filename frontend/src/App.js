@@ -38,6 +38,12 @@ import AuthCallback from "./pages/AuthCallback";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import { ServiceUnavailable } from "./components/ServiceUnavailable";
+import FindCare from "./pages/FindCare";
+import PharmacyAuth from "./pages/PharmacyAuth";
+import PortalLayout from "./pages/pharmacy-portal/PortalLayout";
+import PortalOrders from "./pages/pharmacy-portal/PortalOrders";
+import PortalSponsorship from "./pages/pharmacy-portal/PortalSponsorship";
+import AdminPharmacies from "./pages/admin/Pharmacies";
 
 export default function App() {
   return (
@@ -71,6 +77,11 @@ function AppRouter() {
           <Route path="/" element={<Landing />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/auth/clinician" element={<Auth portal="doctor" />} />
+          <Route path="/auth/pharmacy" element={<PharmacyAuth />} />
+          <Route element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
+            <Route path="/pharmacy-portal" element={<PortalOrders />} />
+            <Route path="/pharmacy-portal/sponsorship" element={<PortalSponsorship />} />
+          </Route>
           <Route path="/auth/forgot" element={<ForgotPassword />} />
           <Route path="/auth/reset" element={<ResetPassword />} />
           <Route path="/onboarding" element={<Onboarding />} />
@@ -82,6 +93,7 @@ function AppRouter() {
             <Route path="/dependents" element={<Dependents />} />
             <Route path="/visits" element={<FeatureRoute flag="visit_summaries"><VisitSummaries /></FeatureRoute>} />
             <Route path="/book" element={<FeatureRoute flag="booking"><BookVisit /></FeatureRoute>} />
+            <Route path="/find-care" element={<FeatureRoute flag="booking"><FindCare /></FeatureRoute>} />
             <Route path="/prescriptions" element={<FeatureRoute flag="prescriptions"><Prescriptions /></FeatureRoute>} />
             <Route path="/pharmacy" element={<FeatureRoute flag="pharmacy_marketplace"><Pharmacy /></FeatureRoute>} />
             <Route path="/pharmacy/orders" element={<FeatureRoute flag="pharmacy_marketplace"><PharmacyOrders /></FeatureRoute>} />
@@ -100,6 +112,7 @@ function AppRouter() {
             <Route path="/admin/flags" element={<FeatureFlags />} />
             <Route path="/admin/demo-requests" element={<DemoRequests />} />
             <Route path="/admin/assignments" element={<AdminAssignments />} />
+            <Route path="/admin/pharmacies" element={<AdminPharmacies />} />
           </Route>
         </Routes>
     </>

@@ -33,7 +33,7 @@ export default function Auth({ portal = "patient" }) {
   const navigate = useNavigate();
   const isDoctorPortal = portal === "doctor";
 
-  if (!loading && user) return <Navigate to={user.role === "doctor" ? "/doctor" : "/dashboard"} replace />;
+  if (!loading && user) return <Navigate to={user.role === "doctor" ? "/doctor" : user.role === "pharmacist" ? "/pharmacy-portal" : "/dashboard"} replace />;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -53,6 +53,11 @@ export default function Auth({ portal = "patient" }) {
         : { name: form.name, email: form.email, password: form.password, tenant_account_id: tenant?.account_id };
       const { data } = await api.post(`/auth/${mode === "login" ? "login" : "register"}`, payload);
 
+      if (data.role === "pharmacist") {
+        await api.post("/auth/logout").catch(() => {});
+        setError("This is a pharmacy account. Use the pharmacy sign-in instead.");
+        return;
+      }
       if (isDoctorPortal && data.role !== "doctor") {
         await api.post("/auth/logout").catch(() => {});
         setError("This account isn't a clinician account. Use the patient sign-in instead.");
@@ -214,6 +219,9 @@ export default function Auth({ portal = "patient" }) {
               Are you a clinician? Sign in here
             </Link>
           )}
+        </p>
+        <p className="text-center text-xs text-ink-soft mt-2">
+          <Link to="/auth/pharmacy" data-testid="switch-to-pharmacy-auth" className="underline">Partner pharmacy? Sign in here</Link>
         </p>
         <p className="text-center text-xs text-ink-soft mt-2">
           Your data is stored securely and never shared without your consent.

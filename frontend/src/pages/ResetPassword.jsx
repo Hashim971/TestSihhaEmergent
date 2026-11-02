@@ -29,7 +29,7 @@ export default function ResetPassword() {
     setSubmitting(true);
     try {
       await api.post("/auth/reset-password", { token, password });
-      window.history.replaceState(null, "", "/auth/reset");
+      window.history.replaceState(null, "", params.get("next") === "pharmacy" ? "/auth/reset?next=pharmacy" : "/auth/reset");
       setDone(true);
     } catch (err) {
       setError(formatApiErrorDetail(err.response?.data?.detail));
@@ -45,7 +45,7 @@ export default function ResetPassword() {
           <CheckCircle2 className="h-10 w-10 text-forest mx-auto mb-3" />
           <h1 className="text-2xl font-bold tracking-tight mb-2">Password updated</h1>
           <p className="text-sm text-ink-soft mb-6">You can now sign in with your new password.</p>
-          <Link to="/auth" data-testid="reset-signin-link" className="btn-primary mx-auto">Sign in</Link>
+          <Link to={params.get("next") === "pharmacy" ? "/auth/pharmacy" : "/auth"} data-testid="reset-signin-link" className="btn-primary mx-auto">Sign in</Link>
         </div>
       </AuthShell>
     );
