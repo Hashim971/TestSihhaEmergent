@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 23: tested super-admin overview (platform stats + activity tracking), the Staging hub with demo reset, branded hospital sign-in (/h/dar-al-shifa, /h/al-noor, unknown slug), the Branding tab slug/tagline fields, the landing white-label wording and callout, health-chat photos (keep/discard, real GPT-5.5 vision, reload, report photo_ids, doctor thumbnails) and the Arabic toggle. Backend: 16/16 pytest pass (one assertion was changed to match the intended white_label gating). Almost all frontend flows work. Fixed: the 'Active, last 30 days' stat card rendered white text on a white card. Found: the tenant-preview branding leaks to other users and pages, the slug error shows a raw regex, and some Arabic strings are missing.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login (used by /h/:slug)", "issue": "The hospital check is client-side only. A login from another hospital at /h/dar-al-shifa sets cookies and records last_login_at/user_activity_days (so it counts as 'active') before the frontend logs it out. Consider passing tenant_account_id/slug to login and refusing on the server."},
+      {"endpoint": "PATCH /api/admin/accounts/{id}/branding", "issue": "An invalid slug returns the raw pydantic message \"String should match pattern '^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$'\", and the UI shows it as a toast. A slug can't be cleared (UI sends undefined, and '' fails the pattern). A slug can be set on accounts with white_label off, but /h/<slug> then shows 'not available' with no warning in the UI."},
+      {"endpoint": "POST /api/chat/sessions/{sid}/report", "issue": "photo_ids contains every kept photo uploaded in the session, even if it was never sent in a message (uploaded and then the send failed). The report convo text has no [photo] marker; only the AI replies describe it. Discarded photos live in an in-process dict (_TEMP_CHAT_PHOTOS), which breaks with more than one worker or a restart. There is no delete path for kept photo objects in storage."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "HospitalSignIn tenant preview", "issue": "HospitalSignIn sets sessionStorage 'sihha_tenant_preview' unconditionally on load. 1) Omar (Al Noor), already signed in, visits /h/dar-al-shifa: he is redirected to /dashboard and the whole app is branded Dar Al Shifa (maroon, 'Previewing Dar Al Shifa' bar). 2) After a refused sign-in, or just visiting /h/dar-al-shifa, the public landing '/' and any later /auth sign-in in that tab keep Dar Al Shifa branding. Fix: only set the preview after a successful sign-in where account_id matches. Clear it on refusal, and when a signed-in user's account_id differs (don't apply it, or show 'you are signed in as X')", "selector": "[data-testid=hospital-signin]", "priority": "MEDIUM"},
+      {"component": "Admin Overview stat-active-month", "issue": "FIXED by testing agent: the .card bg-white overrode bg-forest, so the white text was invisible on the white card. Changed to !bg-forest !border-forest.", "selector": "[data-testid=stat-active-month]", "priority": "HIGH (fixed)"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin Overview (Arabic)", "issues": ["Untranslated: subtitle 'Who is using Sihha AI right now...', 'N this week · N today', 'N accounts in total', 'N hospital accounts', chart footnote 'Activity tracking started...', table headers '7 days'/'30 days' (render as 'DAYS 7')", "'Users in good standing' sub-label reads '51 accounts in total' (means users) next to the hospital-accounts card. Confusing, use 'users in total'."]},
+      {"screen": "Admin Staging (Arabic)", "issues": ["Untranslated: 'Staging (preview)', the env description paragraph, 'Passwords are in the team's credentials note.', the test-login labels (Doctor (Al Noor admin), Standalone patient, Pharmacist) and the feature-switches description"]},
+      {"screen": "/h/:slug (Arabic)", "issues": ["'Patients and staff of {name}.' is not translated. The default headline 'Your health, with your hospital.' is probably untranslated too."]},
+      {"screen": "Branding tab", "issues": ["The slug input has no inline format hint/pattern. Users only find out from a raw regex toast."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter23_admin_stats_staging_chat_photos.py", "/app/test_reports/pytest/pytest_iter23.xml", "/app/backend/tests/fixtures/hand.jpg"],
+  "action_items": [
+    "HospitalSignIn: don't set sihha_tenant_preview until a matching sign-in succeeds; clear it on mismatch/refusal; don't rebrand an already signed-in user from another account (and don't rebrand the public landing page)",
+    "Optionally enforce the hospital on the backend login (tenant slug/account) so refused logins don't set cookies or count as active",
+    "Map the slug 422 to a friendly message ('3–40 lowercase letters, numbers or hyphens') and add an inline hint; allow clearing the slug; warn when white_label is off",
+    "Translate the remaining English strings on admin Overview/Staging and /h/:slug in Arabic",
+    "Consider limiting report photo_ids to photos actually attached to messages"
+  ],
+  "critical_code_review_comments": [
+    "Tenant check only on the client (HospitalSignIn.submit). The backend accepts any valid login and records activity first.",
+    "_TEMP_CHAT_PHOTOS is in-memory (lost on restart, not shared across workers). OK for a single worker; document it or move it to a TTL Mongo collection.",
+    "get_chat_photo: a doctor gets the photo via assert_doctor_can_access_patient. Verified: unrelated doctor dr.faris is refused, and pharmacist/other patient get 404.",
+    "server.py is 5,660 lines, far beyond the 700-line guideline. The new sections should move into routers."
+  ],
+  "updated_files": ["/app/frontend/src/pages/admin/Overview.jsx", "/app/backend/tests/test_iter23_admin_stats_staging_chat_photos.py", "/app/backend/tests/fixtures/hand.jpg"],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "~88% (core flows all pass; tenant-preview leak + Arabic gaps)"},
+  "seed_data_creation": "None. Test chat sessions/messages/photos/report for Omar were deleted from Mongo (the photo objects stay in object storage). The Jeddah slug/tagline used in the test was restored (unset). al-noor and dar-al-shifa slugs are unchanged. The demo hospital was reset 3 times (idempotent: 1 account, 4 users). Fields unset on sultan@darshifa.demo (last_login_at, last_seen_at) were re-set by a login.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run pytest tests/test_iter23_admin_stats_staging_chat_photos.py (3 LLM calls, ~2.5 min). Real photo fixture at backend/tests/fixtures/hand.jpg (also /tmp/hand.jpg). Dar Al Shifa = ACC-4C4369, Al Noor = ACC-12AFFE, Jeddah = ACC-2BC6ED (white_label off, so its slug is never resolvable). Omar user_020593feb10e, Layla user_b1000ae5aad6. Retest: the tenant-preview leak (sign in as Omar, visit /h/dar-al-shifa, check that the branding stays Al Noor) and the Arabic strings.",
+  "rca of the issue": "Tenant leak: HospitalSignIn's useEffect calls sessionStorage.setItem('sihha_tenant_preview', tenant.account_id) and loadTenant() as soon as /api/tenant resolves, before and regardless of sign-in. PlatformContext then applies that preview everywhere in the tab (landing, dashboard), and the 'user && tenant' Navigate sends signed-in users of other hospitals to their home with the wrong brand. Stat card: .card (@apply bg-white) is defined outside a Tailwind layer, so it wins over the bg-forest utility."
+}

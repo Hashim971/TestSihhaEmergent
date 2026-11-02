@@ -18,9 +18,9 @@ export default function AdminOverview() {
         <p className="text-ink-soft mt-1">Who is using Sihha AI right now. "Active" means signed in or used the app in the period.</p>
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Stat icon={Activity} label="Active, last 30 days" value={t.active_month} sub={`${t.active_week} this week · ${t.active_today} today`} testid="stat-active-month" accent />
-        <Stat icon={Users} label="Users in good standing" value={t.in_good_standing} sub={`${t.total} accounts in total`} testid="stat-good-standing" />
-        <Stat icon={Building2} label="Hospitals not suspended" value={s.accounts.not_suspended} sub={`${s.accounts.total} hospital accounts`} testid="stat-accounts" />
+        <Stat icon={Activity} label="Active, last 30 days" value={t.active_month} sub={<><bdi>{t.active_week}</bdi> {"this week"} · <bdi>{t.active_today}</bdi> {"today"}</>} testid="stat-active-month" accent />
+        <Stat icon={Users} label="Users in good standing" value={t.in_good_standing} sub={<><bdi>{t.total}</bdi> {"users in total"}</>} testid="stat-good-standing" />
+        <Stat icon={Building2} label="Hospitals not suspended" value={s.accounts.not_suspended} sub={<><bdi>{s.accounts.total}</bdi> {"hospital accounts"}</>} testid="stat-accounts" />
         <Stat icon={Store} label="Active pharmacies" value={s.pharmacies} testid="stat-pharmacies" />
       </div>
 
@@ -42,7 +42,7 @@ export default function AdminOverview() {
       <div className="card overflow-x-auto" data-testid="active-by-role">
         <table className="w-full text-sm min-w-[560px]">
           <thead className="text-xs uppercase tracking-[0.12em] text-ink-soft bg-sand/60">
-            <tr><th className="text-start p-3">Role</th><th className="text-end p-3">Today</th><th className="text-end p-3">7 days</th><th className="text-end p-3">30 days</th><th className="text-end p-3">Good standing</th><th className="text-end p-3">Total</th></tr>
+            <tr><th className="text-start p-3">Role</th><th className="text-end p-3">Today</th><th className="text-end p-3">Last 7 days</th><th className="text-end p-3">Last 30 days</th><th className="text-end p-3">Good standing</th><th className="text-end p-3">Total</th></tr>
           </thead>
           <tbody className="divide-y divide-line">
             {ROLES.map(([k, label]) => {
@@ -64,7 +64,7 @@ export default function AdminOverview() {
 }
 
 const Stat = ({ icon: Icon, label, value, sub, testid, accent }) => (
-  <div className={`card p-5 ${accent ? "bg-forest text-white border-forest" : ""}`} data-testid={testid}>
+  <div className={`card p-5 ${accent ? "!bg-forest text-white !border-forest" : ""}`} data-testid={testid}>
     <p className={`text-xs flex items-center gap-1.5 ${accent ? "text-white/80" : "text-ink-soft"}`}><Icon className="h-3.5 w-3.5" /> {label}</p>
     <p className="text-3xl font-bold mt-2"><bdi>{value}</bdi></p>
     {sub && <p className={`text-xs mt-1 ${accent ? "text-white/70" : "text-ink-soft"}`}>{sub}</p>}

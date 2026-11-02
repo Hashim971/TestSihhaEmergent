@@ -184,6 +184,7 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+    tenant_account_id: Optional[str] = Field(default=None, max_length=20)
 
 
 async def require_not_pharmacist(user=Depends(get_current_user)):
@@ -241,6 +242,9 @@ async def login(body: LoginRequest, request: Request, response: Response):
             await db.login_attempts.update_one({"identifier": key}, {"$set": update}, upsert=True)
         raise HTTPException(status_code=401, detail="Invalid email or password")
     await db.login_attempts.delete_many({"identifier": {"$in": [identifier, account_key]}})
+    if body.tenant_account_id and user.get("account_id") != body.tenant_account_id.upper() \
+            and (user.get("email") or "").lower() != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="This account isn't registered with this hospital.")
     set_auth_cookies(response, create_access_token(user["user_id"], email), create_refresh_token(user["user_id"]))
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"last_login_at": iso(), "last_seen_at": iso()}})
     await _record_activity(user["user_id"])
@@ -1079,7 +1083,8 @@ async def generate_report(sid: str, user=Depends(get_current_user)):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     history = await db.chat_messages.find({"chat_session_id": sid}, {"_id": 0}).sort("created_at", 1).to_list(200)
-    convo = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history])
+    convo = "\n".join([f"{m['role'].upper()}: {'[attached a photo] ' if m.get('photo_id') or m.get('photo_discarded') else ''}{m['content']}"
+                       for m in history])
     chat = LlmChat(
         api_key=LLM_KEY, session_id=f"report_{sid}", system_message=SCREENING_REPORT_PROMPT,
     ).with_model("openai", "gpt-5.5")
@@ -1092,7 +1097,7 @@ async def generate_report(sid: str, user=Depends(get_current_user)):
         "user_id": user["user_id"],
         "profile_id": session["profile_id"],
         "content": result,
-        "photo_ids": [p["photo_id"] for p in await db.chat_photos.find({"chat_session_id": sid}, {"_id": 0, "photo_id": 1}).to_list(20)],
+        "photo_ids": [m["photo_id"] for m in history if m.get("photo_id")][:20],
         "prompt_version": f"report-{SCREENING_REPORT_VERSION}/chat-{SCREENING_PROMPT_VERSION}",
         "generated_at": iso(),
     }
@@ -3842,7 +3847,7 @@ class BrandingPatch(BaseModel):
     accent_color: Optional[str] = Field(default=None, pattern=HEX_COLOR)
     default_language: Optional[str] = Field(default=None, pattern="^(ar|en)$")
     custom_domain: Optional[str] = Field(default=None, max_length=253)
-    slug: Optional[str] = Field(default=None, pattern="^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
+    slug: Optional[str] = Field(default=None, max_length=60)
     tagline: Optional[str] = Field(default=None, max_length=120)
 
 
@@ -3998,10 +4003,13 @@ async def update_branding(account_id: str, body: BrandingPatch, admin=Depends(re
             raise HTTPException(status_code=409, detail="That web address is already used by another account")
         if domain != account.get("custom_domain"):
             update.update(custom_domain=domain, domain_verified=False)
-    if data.get("slug") and await db.accounts.find_one({"slug": data["slug"], "account_id": {"$ne": account["account_id"]}}):
-        raise HTTPException(status_code=409, detail="That sign-in address is already used by another account")
-    if data.get("slug"):
-        update["slug"] = data["slug"]
+    if "slug" in data:
+        slug = (data["slug"] or "").strip().lower() or None
+        if slug and not re.match(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$", slug):
+            raise HTTPException(status_code=422, detail="Use 3–40 lowercase letters, numbers or hyphens, e.g. al-noor")
+        if slug and await db.accounts.find_one({"slug": slug, "account_id": {"$ne": account["account_id"]}}):
+            raise HTTPException(status_code=409, detail="That sign-in address is already used by another account")
+        update["slug"] = slug
     if "tagline" in data:
         update["tagline"] = (data["tagline"] or "").strip() or None
     if update:

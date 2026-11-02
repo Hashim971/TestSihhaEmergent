@@ -15,7 +15,7 @@ export function BrandingTab({ account, onSaved }) {
   const save = async () => {
     setSaving(true);
     try {
-      onSaved((await api.patch(`/admin/accounts/${account.account_id}/branding`, { ...form, slug: form.slug.trim().toLowerCase() || undefined })).data);
+      onSaved((await api.patch(`/admin/accounts/${account.account_id}/branding`, { ...form, slug: form.slug.trim().toLowerCase() })).data);
       toast.success("Branding saved");
     } catch (e) {
       toast.error(errorText(e));
@@ -51,6 +51,8 @@ export function BrandingTab({ account, onSaved }) {
         <div><label className={labelCls}>Sign-in page address</label>
           <div className="flex items-center gap-2"><span className="text-sm text-ink-soft font-mono" dir="ltr">/h/</span>
             <input value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder="al-noor" dir="ltr" data-testid="branding-slug-input" className={`${inputCls} font-mono`} /></div>
+          <p className="text-xs text-ink-soft mt-1">3–40 lowercase letters, numbers or hyphens. Leave empty to remove the page.</p>
+          {!account.features?.white_label && <p className="text-xs text-amber-700 mt-1" data-testid="branding-slug-wl-off">Turn on White-label in Features, or this page shows "not available".</p>}
           {account.slug && <a href={`/h/${account.slug}`} target="_blank" rel="noreferrer" className="text-xs text-forest underline mt-1 inline-block" data-testid="branding-slug-open">Open the branded sign-in page</a>}</div>
         <div><label className={labelCls}>Sign-in page headline</label>
           <input value={form.tagline} maxLength={120} onChange={(e) => setForm({ ...form, tagline: e.target.value })} placeholder="Your health, with your hospital." data-testid="branding-tagline-input" className={inputCls} /></div>

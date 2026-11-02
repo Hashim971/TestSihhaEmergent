@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { LogIn, MapPin, Sparkles, Building2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -10,7 +10,7 @@ const home = (role) => (role === "doctor" ? "/doctor" : "/dashboard");
 
 export default function HospitalSignIn() {
   const { slug } = useParams();
-  const { user, loading, setUser } = useAuth();
+  const { user, loading, setUser, logout } = useAuth();
   const { loadTenant } = usePlatform();
   const navigate = useNavigate();
   const [tenant, setTenant] = useState(undefined);
@@ -19,16 +19,19 @@ export default function HospitalSignIn() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api.get("/tenant", { params: { slug } }).then(({ data }) => {
-      setTenant(data.tenant);
-      if (data.tenant) {
-        sessionStorage.setItem("sihha_tenant_preview", data.tenant.account_id);
-        loadTenant();
-      }
-    }).catch(() => setTenant(null));
-  }, [slug, loadTenant]);
+    api.get("/tenant", { params: { slug } }).then(({ data }) => setTenant(data.tenant)).catch(() => setTenant(null));
+  }, [slug]);
 
-  if (!loading && user && tenant) return <Navigate to={home(user.role)} replace />;
+  const enter = (account) => {
+    sessionStorage.setItem("sihha_tenant_preview", tenant.account_id);
+    loadTenant();
+    navigate(home(account.role), { replace: true });
+  };
+
+  useEffect(() => {
+    if (!loading && user && tenant && (user.account_id === tenant.account_id || user.is_admin)) enter(user);
+  }, [loading, user, tenant]);
+
   if (tenant === undefined) return <div className="min-h-screen bg-sand flex items-center justify-center text-sm text-ink-soft">Loading…</div>;
   if (!tenant) {
     return (
@@ -48,17 +51,13 @@ export default function HospitalSignIn() {
     setError(null);
     setBusy(true);
     try {
-      const { data } = await api.post("/auth/login", form);
-      if (data.account_id !== tenant.account_id && !data.is_admin) {
-        await api.post("/auth/logout").catch(() => {});
-        setError(`This account isn't registered with ${tenant.name}.`);
-        return;
-      }
+      const { data } = await api.post("/auth/login", { ...form, tenant_account_id: tenant.account_id });
       setUser(data);
-      navigate(home(data.role), { replace: true });
+      enter(data);
     } catch (err) {
       const d = err?.response?.data?.detail;
-      setError(typeof d === "string" ? d : "Sign-in failed. Check your email and password.");
+      setError(err?.response?.status === 403 ? `This account isn't registered with ${tenant.name}.`
+        : typeof d === "string" ? d : "Sign-in failed. Check your email and password.");
     } finally {
       setBusy(false);
     }
@@ -88,10 +87,16 @@ export default function HospitalSignIn() {
       <main className="bg-sand flex items-center justify-center px-6 py-12 relative">
         <div className="absolute top-4 end-4"><LanguageToggle testid="hospital-signin-language" /></div>
         <div className="w-full max-w-md">
+          {user && user.account_id !== tenant.account_id && !user.is_admin && (
+            <div className="card p-4 mb-4 text-sm flex flex-wrap items-center justify-between gap-3" data-testid="hospital-signin-other-account">
+              <span>You're signed in as <bdi className="font-semibold">{user.email}</bdi>, which isn't part of this hospital.</span>
+              <button onClick={logout} className="btn-outline !py-1.5 !px-3 text-xs" data-testid="hospital-signin-switch">Sign out</button>
+            </div>
+          )}
           <form onSubmit={submit} className="card p-8 space-y-4" data-testid="hospital-signin-form">
             <div>
               <h2 className="text-2xl font-bold tracking-tight">Sign in</h2>
-              <p className="text-sm text-ink-soft mt-1">Patients and staff of {tenant.name}.</p>
+              <p className="text-sm text-ink-soft mt-1">For patients and staff of <bdi>{tenant.name}</bdi></p>
             </div>
             {error && <div className="border border-terracotta/40 bg-terracotta/5 text-terracotta text-sm rounded-xl px-4 py-3" data-testid="hospital-signin-error">{error}</div>}
             <label className="block text-sm"><span className="text-xs uppercase tracking-[0.15em] text-ink-soft">Email</span>
