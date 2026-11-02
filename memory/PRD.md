@@ -370,7 +370,7 @@ Answers "does this screening need a visit, and how does it get booked?" plus e-p
 
 ## Backlog
 - P1: t() templates for interpolated sentences (alert group labels, KPI subtitles); translate AI-generated content per language
-- P1: Vitals Trend Warnings
+- P1: Vitals trend digest (weekly summary email)
 - P1: Connect a payment provider for sponsorships (user will choose later; Stripe can't provision for SA). Hook: request_sponsorship / mark_sponsorship_paid in server.py
 - P2: Native push notifications/camera in the Capacitor shells (helps Apple review)
 
@@ -381,3 +381,9 @@ Answers "does this screening need a visit, and how does it get booked?" plus e-p
 - Doctor schedule List/Week toggle (components/WeekView.jsx, clinic time).
 - Screening prompts replaced with user files agents/prompts/screening_chat_v1.md + screening_report_v1.md (report system prompt, subject context incl. dependents, prompt_version on reports).
 - ConfirmDialog/Modal (portal) replaces native prompts in new screens. Seed: backend/seed_marketplace_portal.py. Tests: iteration_19, iteration_20.
+
+## 2026-06 — Phase F: vitals trend warnings, hospital ratings, pharmacy products
+- Vitals trends: TREND_METRICS (systolic 90–140, diastolic 60–90 mmHg, glucose 70–126 mg/dL), compute_vital_trends (above/below_limit = 2 of last 3 outside; rising/falling = 7-day vs previous 7-day avg near limit; no_data), EN+AR messages. notify_vital_trends after POST /vitals + simulate → alert type vital_trend + Resend email to patient and assigned doctor, deduped per metric+status per 24h (vital_trend_notices). Doctor per-patient limits: db.vital_limits, PUT/DELETE /api/doctor/patients/{id}/vital-limits. UI: components/VitalTrends.jsx (patient Dashboard + DoctorPortal), VitalLimitsEditor.jsx.
+- Hospital ratings: db.hospital_ratings (stars 1–5 + comment, published immediately, hidden flag). POST /api/encounters/{id}/rating (completed visits at a hospital only), GET /api/care/hospitals/{id}/reviews, moderation /api/admin/accounts/{id}/ratings + /api/admin/ratings/{id}, /api/account/ratings. Completion creates rating_request alert and stamps encounter.account_id. Find Care sorts by Bayesian trust score (prior 3.5×3), Top rated badge (≥3 ratings, avg ≥4.5). UI: RecentVisits.jsx (dashboard), HospitalReviews.jsx, admin/RatingsTab.jsx (Super Admin workspace + /my-hospital).
+- Pharmacy products: /pharmacy-portal/products — CSV template/import (≤1 MB, ≤2000 rows, per-row errors, upsert by SKU, active column), add/edit one by one, compliance (Rx needs SFDA reg + days_supply, controlled never), licences card (owner edits SFDA/MOH/CR). Applications now require MOH licence + CR number.
+- Security: profile_key restricts profile_id to self or own dependents (user._dependent_ids loaded in get_current_user) — fixed IDOR across vitals/meds/orders. Doctor summary excludes dependents' alerts/reports. Tests: iteration_21, iteration_22.

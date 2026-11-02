@@ -15,12 +15,13 @@ export function VitalTrends({ data, testid = "vital-trends", footer, audience = 
   const { lang } = useLang();
   if (!data) return null;
   const flagged = data.trends.filter((t) => t.severity).length;
+  const empty = data.trends.every((t) => t.status === "no_data");
   return (
     <div className="card p-6" data-testid={testid}>
       <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <h2 className="text-lg font-semibold flex items-center gap-2"><Activity className="h-4 w-4 text-forest" /> Vitals trends</h2>
-        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${flagged ? "bg-terracotta/10 text-terracotta" : "bg-sage/30 text-forest"}`} data-testid={`${testid}-summary`}>
-          {flagged ? (lang === "ar" ? `${flagged} تحتاج إلى انتباه` : `${flagged} need attention`) : "All within limits"}
+        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${flagged ? "bg-terracotta/10 text-terracotta" : empty ? "bg-sand text-ink-soft" : "bg-sage/30 text-forest"}`} data-testid={`${testid}-summary`}>
+          {flagged ? (lang === "ar" ? `${flagged} تحتاج إلى انتباه` : `${flagged} need attention`) : empty ? "No recent readings" : "All within limits"}
         </span>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

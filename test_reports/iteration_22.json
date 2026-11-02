@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 22 retest of the 7 fixes from iteration 21. All 7 are verified at the API and UI level. Backend: new suite test_iter22_retest.py 28/29 passed. The 1 failure is a new minor edge case: an invalid 'active' CSV value such as 'maybe' is silently read as inactive. Regression: iter21 35/35 with iter20 included, iter19 18 passed and 1 skipped. (1) IDOR fixed: 15 profile-scoped endpoints return 404 'Profile not found' for another user's id, nothing is written, 'self' and the caller's own id still work. The caregiver dependent flow still works: vitals, latest, trends, the trend alert prefixed with the dependent's name, medications, schedule, chat session, cart and orders. Another user cannot use A's dependent id, and deleting the dependent revokes access. In the UI, switching profile to a TEST_ dependent drives every request with dep_ ids on Dashboard, Medications, Health Chat and Pharmacy, with zero API errors. (2) The editor PUT body contains only systolic_max:150 (every other limit is null). Diastolic and glucose stay 'standard'. (3) An unrounded 4.45 average over 20 ratings shows rating_avg 4.5 but top_rated false; it flips to true once the raw average is >= 4.5. (4) The template has an 'active' column (yes/no). active=no is respected, an empty cell or missing column keeps the existing flag, and yes/No toggle it. The UI shows 'Hidden' correctly after re-upload. (5) The 'No data' badge, Arabic labels, messages, summary and footer all render in Arabic. The doctor view shows 'custom for this patient' and the doctor footer. The breakdown runs 5 to 1, and '1 rating' / '1 تقييم' is singular. (6) diastolic_max=60 alone returns 422 and the UI shows the toast. (7) Reviews return 404 for unlisted, suspended and unknown accounts and 200 for listed ones, including a lowercase id. Quick UI regression passed: rate visit, edit-rating, the Find Care rating and dialog, pharmacy CSV upload with row errors, and reset limits.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/doctor/patients/{id}/summary", "issue": "Alerts (and reports) are filtered only by user_id, so a caregiver patient's dependent alerts show in the doctor's 'Recent Alerts' for the parent. Example: Dr. Layla saw 'TEST_ Lina: Systolic blood pressure was above 140…' and 'Systolic BP is high: 156' on Omar's page. That is a child's data shown to the parent's doctor, and it reads as if it were Omar's. Filter by profile_id == patient_id."},
+      {"endpoint": "POST /api/pharmacy-portal/catalog/import", "issue": "Any 'active' value other than yes/true/1 is silently treated as inactive. 'maybe' or a typo hides the product with no row error. Validate it like requires_prescription does: yes/no/true/false/1/0/empty."},
+      {"endpoint": "POST /api/encounters (doctor branch)", "issue": "profile_id = body.profile_id or patient_id is not checked as belonging to patient_user_id. Low risk, because only doctors who can already access the patient reach it, but it is the same IDOR class. Validate it against the patient's own id or their dependents."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Vitals trends summary chip (patient + doctor)", "issues": ["When all three metrics are 'No data', the header chip still says a green 'All within limits'. Show a neutral 'No recent readings' instead."]},
+      {"screen": "Pharmacy portal products table", "issues": ["When name_ar is empty, the English name is shown twice (primary and secondary line). Pre-existing and cosmetic."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter22_retest.py",
+    "/app/backend/tests/iter22_ui_seed.py",
+    "/app/backend/tests/test_iter21_trends_ratings_products.py",
+    "/app/test_reports/pytest/iter22.xml",
+    "/app/test_reports/pytest/iter22_regression.xml"
+  ],
+  "action_items": [
+    "In doctor_patient_summary, filter alerts and health_reports by profile_id == patient_id (or exclude dependents' alerts) so dependent data doesn't appear on the parent's doctor view.",
+    "Validate the CSV 'active' value: return a row error for anything other than yes/no/true/false/1/0/empty.",
+    "Optional: in the doctor create_encounter branch, validate profile_id against the patient and their dependents.",
+    "Optional: show a neutral trends summary chip when every metric is no_data."
+  ],
+  "critical_code_review_comments": [
+    "profile_key now correctly restricts access to self, the caller's own id or their dependents. _dependent_ids is loaded once per request in get_current_user. That adds a dependents query on every authenticated request; acceptable, but it could be cached or loaded lazily.",
+    "VitalLimitsEditor: if a value was customised before and the doctor types the standard number back, it is still sent, so the source stays 'doctor'. Clearing the field is the only way to drop it back to standard. Minor UX.",
+    "server.py is 5394 lines; it should be split into routers (vitals, ratings, pharmacy portal)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter22_retest.py (new)",
+    "/app/backend/tests/iter22_ui_seed.py (new)",
+    "/app/backend/tests/test_iter21_trends_ratings_products.py (empty trends now expect 'no_data' instead of 'ok')"
+  ],
+  "success_rate": {"backend": "97% (28/29 new; 53/53 regression + 1 skipped)", "frontend": "100% of retested flows"},
+  "seed_data_creation": "Temporary only: TEST_ patients a22/b22, TEST_ dependents (TEST_ Kid, TEST_ Lina for omar), vitals, alerts, trend notices, medications, chat sessions and messages, vital_limits, padded TEST ratings on Jeddah, Jeddah listed/suspended toggled and restored, TEST_A*/TEST_UI* catalog items, the iter21 UI encounter and rating for omar. All removed. I also removed a stale TEST_Kid2 dependent left over from an earlier iteration. Verified afterwards: omar is on Al Noor with dr.layla and has no vital_limits or trend alerts, solo is standalone, Jeddah is listed with status trial, the pharmacist is owner.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run pytest test_iter22_retest.py (it registers its own patients and cleans up; test_active_invalid_value fails until 'active' CSV values are validated). For UI: python iter22_ui_seed.py prints a TEST_ dependent id for omar with 2 high systolic readings; switch via profile-switcher-btn then profile-option-<dep>. Use the sidebar nav, because page.goto reloads and resets activeProfile to 'Me' (in-memory). Then run python iter22_ui_seed.py cleanup and python iter21_ui_seed.py cleanup. Language: click [data-testid=language-toggle]. Editing a test file under /app/backend triggers a backend hot reload, so wait a few seconds before running pytest or you get 502s."
+}

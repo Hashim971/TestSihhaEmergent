@@ -99,7 +99,7 @@ export default function PortalProducts() {
             {data.items.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-ink-soft" data-testid="products-empty">No products yet — upload the template or add one.</td></tr>}
             {data.items.map((it) => (
               <tr key={it.item_id} className={it.active ? "" : "opacity-50"} data-testid={`product-row-${it.item_id}`}>
-                <td className="p-3"><p className="font-medium">{it.name_en}</p><p className="text-xs text-ink-soft" dir="rtl">{it.name_ar}</p></td>
+                <td className="p-3"><p className="font-medium">{it.name_en}</p>{it.name_ar && it.name_ar !== it.name_en && <p className="text-xs text-ink-soft" dir="rtl">{it.name_ar}</p>}</td>
                 <td className="p-3 font-mono text-xs">{it.sku}</td>
                 <td className="p-3 text-xs">{it.requires_prescription ? "Prescription" : "No prescription"}{it.active ? "" : " · Hidden"}</td>
                 <td className="p-3 text-end"><bdi>{Number(it.price_sar).toFixed(2)}</bdi></td>

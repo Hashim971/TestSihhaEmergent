@@ -1463,8 +1463,10 @@ async def doctor_patients(user=Depends(require_doctor)):
 async def doctor_patient_summary(patient_id: str, user=Depends(require_doctor)):
     patient = await assert_doctor_can_access_patient(db, user, patient_id)
     vitals = await db.vitals.find({"profile_id": patient_id}, {"_id": 0}).sort("recorded_at", -1).to_list(30)
-    alerts = await db.alerts.find({"user_id": patient_id}, {"_id": 0}).sort("created_at", -1).to_list(20)
-    reports = await db.health_reports.find({"user_id": patient_id}, {"_id": 0}).sort("generated_at", -1).to_list(10)
+    alerts = await db.alerts.find({"user_id": patient_id, "profile_id": {"$in": [patient_id, None]}}, {"_id": 0}
+                                  ).sort("created_at", -1).to_list(20)
+    reports = await db.health_reports.find({"user_id": patient_id, "profile_id": {"$in": [patient_id, None]}}, {"_id": 0}
+                                           ).sort("generated_at", -1).to_list(10)
     logs = await db.dose_logs.find({"profile_id": patient_id}, {"_id": 0}).to_list(2000)
     taken = sum(1 for l in logs if l["status"] == "taken")
     missed = sum(1 for l in logs if l["status"] == "missed")
@@ -1534,6 +1536,9 @@ async def create_encounter(body: EncounterCreate, user=Depends(get_current_user)
         patient = await assert_doctor_can_access_patient(db, user, body.patient_user_id)
         patient_user_id, doctor_user_id = body.patient_user_id, user["user_id"]
         profile_id = body.profile_id or patient["user_id"]
+        if profile_id != patient["user_id"] and not await db.dependents.find_one(
+                {"dependent_id": profile_id, "user_id": patient["user_id"]}):
+            raise HTTPException(status_code=422, detail="That profile doesn't belong to this patient")
     else:
         if not body.doctor_user_id:
             raise HTTPException(status_code=400, detail="doctor_user_id is required")
@@ -5303,8 +5308,10 @@ async def portal_import_catalog(file: UploadFile = File(...), user=Depends(requi
                 current = await db.catalog_items.find_one({"pharmacy_id": user["pharmacy_id"], "sku": data["sku"]},
                                                           {"_id": 0, "active": 1})
                 data["active"] = current["active"] if current else True
-            else:
+            elif row["active"].strip().lower() in ("yes", "true", "1", "no", "false", "0"):
                 data["active"] = row["active"].strip().lower() in ("yes", "true", "1")
+            else:
+                raise ValueError("active must be yes or no")
             problems = _catalog_problems(data)
             if problems:
                 raise ValueError(" ".join(problems))

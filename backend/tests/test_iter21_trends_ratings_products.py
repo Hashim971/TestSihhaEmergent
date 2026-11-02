@@ -104,7 +104,7 @@ class TestVitalTrends:
         for t in d["trends"]:
             for k in ("status", "message", "limit", "limit_source", "recent_avg", "previous_avg", "change", "series"):
                 assert k in t
-            assert t["status"] == "ok" and t["limit_source"] == "standard"
+            assert t["status"] == "no_data" and t["limit_source"] == "standard"  # iter22: empty -> no_data
         assert metrics["systolic"]["limit"] == {"max": 140, "min": 90}
         assert metrics["glucose"]["limit"] == {"max": 126, "min": 70}
 
