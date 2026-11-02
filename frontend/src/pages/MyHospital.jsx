@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
+import { ReportDownload } from "../components/admin/ReportDownload";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../lib/api";
 import { OverviewTab } from "../components/admin/OverviewTab";
@@ -12,6 +13,7 @@ export default function MyHospital() {
   const { user } = useAuth();
   const [overview, setOverview] = useState(null);
   const [tab, setTab] = useState("overview");
+  const [params] = useSearchParams();
 
   useEffect(() => { api.get("/account/overview").then(({ data }) => setOverview(data)).catch(() => {}); }, []);
 
@@ -23,6 +25,7 @@ export default function MyHospital() {
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{overview.account.name}</h1>
         <IdChip id={overview.account.account_id} testid="my-hospital-id" />
+        <div className="ml-auto"><ReportDownload endpoint="/account/report" initialMonth={params.get("report")} testid="my-hospital-report" /></div>
       </div>
       <div className="flex gap-1 border-b border-line mb-6">
         {TABS.map(([k, label]) => (

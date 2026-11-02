@@ -39,7 +39,6 @@ export function PlatformProvider({ children }) {
       setTenant(data.tenant);
       applyBrandColors(data.tenant?.primary_color, data.tenant?.accent_color);
       document.title = data.tenant ? `${data.tenant.name} — powered by Sihha AI` : "Sihha AI — Intelligent Healthcare";
-      document.documentElement.lang = data.tenant?.default_language || "en";
     } catch {
       setTenant(null);
     }

@@ -1,10 +1,15 @@
 crons:
   - name: audio-retention-purge
-    schedule: "17 3 * * *"
+    description: "Deletes consultation audio older than the retention window, daily at 03:17 UTC"
+    cron: "17 3 * * *"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/audio-purge"
     method: POST
-    url: "{BACKEND_URL}/api/admin/audio/purge"
-    description: >
-      Hard-deletes consultation audio past its retention window (AUDIO_RETENTION_DAYS).
-      The consultation_audio metadata row survives with deleted_at set, for audit.
-      Requires an admin session; run backend/scripts/audio_retention.py locally for an
-      unauthenticated in-process purge.
+    enabled: true
+  - name: monthly-usage-reports
+    description: "Emails each hospital admin last month's usage report PDF on the 1st at 9am Riyadh time"
+    cron: "0 6 1 * *"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/monthly-reports"
+    method: POST
+    enabled: true

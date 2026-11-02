@@ -29,6 +29,8 @@ import MyHospital from "./pages/MyHospital";
 import { PlatformProvider } from "./context/PlatformContext";
 import { StagingBar } from "./components/StagingBar";
 import { FeatureRoute } from "./components/FeatureRoute";
+import { LanguageProvider } from "./context/LanguageContext";
+import DemoRequests from "./pages/admin/DemoRequests";
 import Intake from "./pages/Intake";
 import EncounterDetail from "./pages/EncounterDetail";
 import Settings from "./pages/Settings";
@@ -41,12 +43,14 @@ export default function App() {
   return (
     <BrowserRouter>
       <PlatformProvider>
+        <LanguageProvider>
         <AuthProvider>
           <StagingBar />
           <AppRouter />
           <ServiceUnavailable />
           <Toaster position="top-right" richColors />
         </AuthProvider>
+        </LanguageProvider>
       </PlatformProvider>
     </BrowserRouter>
   );
@@ -89,6 +93,7 @@ function AppRouter() {
             <Route path="/admin/accounts" element={<Accounts />} />
             <Route path="/admin/accounts/:accountId" element={<AccountWorkspace />} />
             <Route path="/admin/flags" element={<FeatureFlags />} />
+            <Route path="/admin/demo-requests" element={<DemoRequests />} />
             <Route path="/admin/assignments" element={<AdminAssignments />} />
           </Route>
         </Routes>

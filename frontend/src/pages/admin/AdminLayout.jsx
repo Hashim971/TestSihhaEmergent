@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, Navigate, Outlet, useNavigate } from "react-router-dom";
-import { Building2, ToggleRight, UserCheck, Search, ArrowLeft, LogOut, ShieldCheck } from "lucide-react";
+import { Building2, ToggleRight, UserCheck, Search, ArrowLeft, LogOut, ShieldCheck, Inbox } from "lucide-react";
+import { LanguageToggle } from "../../components/LanguageToggle";
 import { useAuth } from "../../context/AuthContext";
 import { usePlatform } from "../../context/PlatformContext";
 import { AccountSwitcher } from "../../components/admin/AccountSwitcher";
@@ -9,6 +10,7 @@ import { QuickNav } from "../../components/admin/QuickNav";
 const nav = [
   { to: "/admin/accounts", label: "Accounts", icon: Building2, testid: "admin-nav-accounts" },
   { to: "/admin/flags", label: "Feature switches", icon: ToggleRight, testid: "admin-nav-flags" },
+  { to: "/admin/demo-requests", label: "Demo requests", icon: Inbox, testid: "admin-nav-demo-requests" },
   { to: "/admin/assignments", label: "Doctor assignments", icon: UserCheck, testid: "admin-nav-assignments" },
 ];
 
@@ -58,6 +60,7 @@ export default function AdminLayout() {
           ))}
         </nav>
         <div className="p-4 border-t border-line space-y-2">
+          <LanguageToggle className="w-full justify-center" testid="admin-language-toggle" />
           <button onClick={() => navigate(user.role === "doctor" ? "/doctor" : "/dashboard")} data-testid="admin-back-to-app-btn" className="btn-outline w-full justify-center text-xs">
             <ArrowLeft className="h-3.5 w-3.5" /> Back to app
           </button>

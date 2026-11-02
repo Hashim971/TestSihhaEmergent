@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { usePlatform } from "../context/PlatformContext";
 import { BrandMark } from "./BrandMark";
+import { LanguageToggle } from "./LanguageToggle";
 
 const patientNav = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
@@ -183,6 +184,7 @@ export default function Layout() {
           )}
 
           <div className="flex items-center gap-3">
+            <LanguageToggle />
             {/* Alerts */}
             <div className="relative">
               <button

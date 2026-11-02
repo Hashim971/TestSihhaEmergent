@@ -1,0 +1,16 @@
+{
+  "appId": "ai.sihha.app",
+  "appName": "Sihha AI",
+  "webDir": "www",
+  "server": {
+    "url": "https://sihha-rebuild.preview.emergentagent.com",
+    "cleartext": false,
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  },
+  "ios": {
+    "contentInset": "automatic"
+  }
+}

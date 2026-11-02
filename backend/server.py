@@ -45,7 +45,8 @@ from agents.patient_summary import PatientSummaryAgent
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-from emailer import send_email, password_reset_email, account_invite_email
+from emailer import send_email, password_reset_email, account_invite_email, usage_report_email, demo_alert_email
+from usage_report import render_usage_report
 
 client = AsyncIOMotorClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=8000)
 db = client[os.environ["DB_NAME"]]
@@ -4120,8 +4121,176 @@ async def create_demo_request(body: DemoRequestIn, request: Request):
     if await db.demo_requests.count_documents({"ip": ip, "created_at": {"$gte": iso(now_utc() - timedelta(hours=1))}}) >= 5:
         raise HTTPException(status_code=429, detail="Thanks — we already have your request.")
     await db.demo_requests.insert_one({"request_id": f"demo_{uuid.uuid4().hex[:12]}", **body.model_dump(),
-                                       "email": body.email.strip().lower(), "ip": ip, "created_at": iso()})
+                                       "email": body.email.strip().lower(), "ip": ip, "status": "new", "notes": "",
+                                       "created_at": iso()})
+    settings = await db.app_settings.find_one({"key": "demo_alert_email"}, {"_id": 0})
+    if settings and settings.get("value"):
+        subject, html = demo_alert_email(body.model_dump(), f"{_app_origin(request)}/admin/demo-requests")
+        _send_in_background("demo_alert", settings["value"], subject, html)
     return {"ok": True}
+
+
+DEMO_STATUSES = ("new", "contacted", "demo_booked", "won", "lost")
+
+
+class DemoRequestPatch(BaseModel):
+    status: Optional[str] = Field(default=None, pattern="^(new|contacted|demo_booked|won|lost)$")
+    notes: Optional[str] = Field(default=None, max_length=4000)
+
+
+class AlertEmailIn(BaseModel):
+    email: Optional[str] = Field(default=None, max_length=254)
+
+
+@api.patch("/admin/demo-requests/{request_id}")
+async def update_demo_request(request_id: str, body: DemoRequestPatch, admin=Depends(require_admin)):
+    update = body.model_dump(exclude_none=True)
+    result = await db.demo_requests.update_one({"request_id": request_id},
+                                               {"$set": {**update, "updated_at": iso(), "updated_by": admin["user_id"]}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Request not found")
+    return await db.demo_requests.find_one({"request_id": request_id}, {"_id": 0, "ip": 0})
+
+
+@api.get("/admin/settings/demo-alert")
+async def get_demo_alert(admin=Depends(require_admin)):
+    row = await db.app_settings.find_one({"key": "demo_alert_email"}, {"_id": 0})
+    return {"email": (row or {}).get("value")}
+
+
+@api.put("/admin/settings/demo-alert")
+async def set_demo_alert(body: AlertEmailIn, admin=Depends(require_admin)):
+    email = (body.email or "").strip().lower() or None
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address")
+    await db.app_settings.update_one({"key": "demo_alert_email"}, {"$set": {"key": "demo_alert_email", "value": email}}, upsert=True)
+    return {"email": email}
+
+
+def _report_period(month: Optional[str]):
+    if month:
+        if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", month):
+            raise HTTPException(status_code=422, detail="Use a month like 2026-05")
+        start = datetime(int(month[:4]), int(month[5:]), 1, tzinfo=timezone.utc)
+    else:
+        first = now_utc().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        start = (first - timedelta(days=1)).replace(day=1)
+    end = (start + timedelta(days=32)).replace(day=1)
+    return start, end
+
+
+async def _usage_report(account: dict, month: Optional[str]) -> dict:
+    start, end = _report_period(month)
+    window = {"$gte": iso(start), "$lt": iso(end)}
+    aid = account["account_id"]
+    staff = await db.users.find({"account_id": aid, "role": {"$ne": "patient"}}, {"_id": 0, "user_id": 1, "name": 1}).to_list(5000)
+    customer_ids = [u["user_id"] for u in await db.users.find({"account_id": aid, "role": "patient"}, {"_id": 0, "user_id": 1}).to_list(50000)]
+    staff_ids = [s["user_id"] for s in staff]
+    visits, new_customers, screenings, prescriptions, visits_by_doc, rx_by_doc = await asyncio.gather(
+        db.encounters.count_documents({"doctor_user_id": {"$in": staff_ids}, "created_at": window}),
+        db.users.count_documents({"account_id": aid, "role": "patient", "created_at": window}),
+        db.health_reports.count_documents({"user_id": {"$in": customer_ids}, "generated_at": window}),
+        db.prescriptions.count_documents({"issued_by_doctor_user_id": {"$in": staff_ids}, "created_at": window}),
+        db.encounters.aggregate([{"$match": {"doctor_user_id": {"$in": staff_ids}, "created_at": window}},
+                                 {"$group": {"_id": "$doctor_user_id", "n": {"$sum": 1}}}]).to_list(5000),
+        db.prescriptions.aggregate([{"$match": {"issued_by_doctor_user_id": {"$in": staff_ids}, "created_at": window}},
+                                    {"$group": {"_id": "$issued_by_doctor_user_id", "n": {"$sum": 1}}}]).to_list(5000),
+    )
+    v = {r["_id"]: r["n"] for r in visits_by_doc}
+    p = {r["_id"]: r["n"] for r in rx_by_doc}
+    flags = await effective_flags(account)
+    labels = {f["key"]: f["label"] for f in FEATURE_FLAGS}
+    return {
+        "account_id": aid, "account_name": (account.get("branding") or {}).get("display_name") or account["name"],
+        "primary_color": (account.get("branding") or {}).get("primary_color"),
+        "period_label": start.strftime("%B %Y"), "month": start.strftime("%Y-%m"),
+        "generated_at": now_utc().strftime("%d %b %Y %H:%M UTC"),
+        "kpis": [
+            {"label": "Visits", "value": visits, "sub": "consultations this month"},
+            {"label": "New customers", "value": new_customers, "sub": f"{len(customer_ids)} in total"},
+            {"label": "AI screenings", "value": screenings},
+            {"label": "Prescriptions", "value": prescriptions},
+            {"label": "Staff", "value": len(staff)},
+            {"label": "Modules on", "value": sum(1 for k in flags if flags[k] and k != "white_label")},
+        ],
+        "tables": [
+            ("Activity by doctor", ["Doctor", "Visits", "Prescriptions"],
+             sorted([[s["name"], v.get(s["user_id"], 0), p.get(s["user_id"], 0)] for s in staff], key=lambda r: -r[1])),
+            ("Modules", ["Module", "Status"], [[labels[k], "On" if flags[k] else "Off"] for k in labels if k != "white_label"]),
+        ],
+    }
+
+
+def _pdf_response(report: dict) -> Response:
+    pdf = render_usage_report(report)
+    filename = f"{report['account_id']}-usage-{report['month']}.pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@api.get("/admin/accounts/{account_id}/report")
+async def admin_usage_report(account_id: str, month: Optional[str] = None, admin=Depends(require_admin)):
+    return _pdf_response(await _usage_report(await get_account_or_404(account_id), month))
+
+
+@api.get("/account/report")
+async def my_usage_report(month: Optional[str] = None, user=Depends(require_account_admin)):
+    return _pdf_response(await _usage_report(await get_account_or_404(user["account_id"]), month))
+
+
+def _verify_cron(request: Request):
+    header = request.headers.get("authorization", "")
+    token = header[7:] if header.startswith("Bearer ") else ""
+    if not token or not secrets.compare_digest(token, os.environ["WEBHOOK_CRON_SECRET"]):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+async def _claim_cron_run(request: Request, name: str) -> bool:
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid body")
+    run_id = request.headers.get("x-webhook-id") or (body or {}).get("run_id") or f"{name}:{uuid.uuid4().hex}"
+    result = await db.cron_runs.update_one({"run_id": run_id}, {"$setOnInsert": {"run_id": run_id, "name": name, "at": iso()}}, upsert=True)
+    return result.upserted_id is not None
+
+
+def _in_background(coro):
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+async def send_monthly_reports():
+    origin = next(o for o in CORS_ORIGINS if o.startswith("https://"))
+    month = _report_period(None)[0].strftime("%Y-%m")
+    period = _report_period(None)[0].strftime("%B %Y")
+    for account in await db.accounts.find({"status": {"$ne": "suspended"}}, ACCOUNT_PROJECTION).to_list(10000):
+        name = (account.get("branding") or {}).get("display_name") or account["name"]
+        admins = await db.users.find({"account_id": account["account_id"], "account_role": "account_admin",
+                                      "password_hash": {"$exists": True}}, {"_id": 0, "user_id": 1, "name": 1, "email": 1}).to_list(50)
+        for a in admins:
+            subject, html = usage_report_email(a["name"], name, period, f"{origin}/my-hospital?report={month}")
+            await _deliver_reset_email(a["user_id"], a["email"], subject, html)
+        await db.accounts.update_one({"account_id": account["account_id"]}, {"$set": {"last_report_sent": month}})
+
+
+@api.post("/cron/monthly-reports")
+async def cron_monthly_reports(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    _verify_cron(request)
+    if await _claim_cron_run(request, "monthly-reports"):
+        _in_background(send_monthly_reports())
+    return {"accepted": True}
+
+
+@api.post("/cron/audio-purge")
+async def cron_audio_purge(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    _verify_cron(request)
+    if await _claim_cron_run(request, "audio-purge"):
+        _in_background(purge_expired_audio())
+    return {"accepted": True}
 
 
 @api.get("/admin/demo-requests")

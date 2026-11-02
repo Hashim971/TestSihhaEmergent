@@ -140,6 +140,46 @@ def account_invite_email(name: str, account_name: str, link: str) -> tuple[str, 
     return subject, html
 
 
+def usage_report_email(name: str, account_name: str, period: str, link: str) -> tuple[str, str]:
+    subject = f"{account_name} — usage report for {period}"
+    brand = escape(EMAIL_FROM_NAME)
+    html = (
+        '<table role="presentation" width="100%" style="background:#F6F1E7"><tr><td style="padding:32px">'
+        '<table role="presentation" width="100%" style="max-width:520px;margin:0 auto;background:#ffffff;'
+        'border-radius:16px"><tr><td style="padding:32px;font-family:Arial,sans-serif;color:#1F2A24">'
+        f'<p style="font-size:20px;font-weight:bold;color:#1F4D3A;margin:0 0 16px">{brand}</p>'
+        f'<p style="margin:0 0 12px">Hi {escape(name)},</p>'
+        f'<p style="margin:0 0 20px">The usage report for {escape(account_name)} covering {escape(period)} is ready: '
+        'visits, screenings, prescriptions and staff activity.</p>'
+        f'<p style="margin:0 0 24px"><a href="{escape(link, quote=True)}" style="background:#1F4D3A;color:#ffffff;'
+        'padding:12px 24px;border-radius:999px;text-decoration:none;font-weight:bold">Open the report</a></p>'
+        '<p style="margin:0 0 8px;font-size:13px;color:#5B6B62">Sign in to download the PDF. Reports contain '
+        'counts only, no patient details.</p>'
+        f'<p style="margin:16px 0 0;font-size:12px;color:#8A968F">Sent by {brand}.</p>'
+        '</td></tr></table></td></tr></table>'
+    )
+    return subject, html
+
+
+def demo_alert_email(req: dict, link: str) -> tuple[str, str]:
+    subject = f"New demo request — {req['organization']}"
+    rows = "".join(f'<tr><td style="padding:4px 12px 4px 0;color:#5B6B62">{escape(k)}</td><td style="padding:4px 0">{escape(v or "—")}</td></tr>'
+                   for k, v in (("Name", req["name"]), ("Email", req["email"]), ("Organisation", req["organization"]),
+                                ("Role", req.get("role")), ("Message", req.get("message"))))
+    html = (
+        '<table role="presentation" width="100%" style="background:#F6F1E7"><tr><td style="padding:32px">'
+        '<table role="presentation" width="100%" style="max-width:520px;margin:0 auto;background:#ffffff;'
+        'border-radius:16px"><tr><td style="padding:32px;font-family:Arial,sans-serif;color:#1F2A24">'
+        f'<p style="font-size:20px;font-weight:bold;color:#1F4D3A;margin:0 0 16px">{escape(EMAIL_FROM_NAME)}</p>'
+        '<p style="margin:0 0 16px">Someone asked for a demo from the website.</p>'
+        f'<table role="presentation" style="font-size:14px;margin:0 0 24px">{rows}</table>'
+        f'<p style="margin:0"><a href="{escape(link, quote=True)}" style="background:#1F4D3A;color:#ffffff;'
+        'padding:12px 24px;border-radius:999px;text-decoration:none;font-weight:bold">Open the demo inbox</a></p>'
+        '</td></tr></table></td></tr></table>'
+    )
+    return subject, html
+
+
 def password_reset_email(name: str, link: str) -> tuple[str, str]:
     subject = f"Reset your {EMAIL_FROM_NAME} password"
     brand = escape(EMAIL_FROM_NAME)

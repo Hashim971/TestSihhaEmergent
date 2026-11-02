@@ -13,6 +13,7 @@ import { FeaturesTab } from "../../components/admin/FeaturesTab";
 import { DomainTab } from "../../components/admin/DomainTab";
 import { ImportTab } from "../../components/admin/ImportTab";
 import { OnboardingTab } from "../../components/admin/OnboardingTab";
+import { ReportDownload } from "../../components/admin/ReportDownload";
 
 const TABS = [
   { key: "overview", label: "Overview" },
@@ -80,9 +81,12 @@ export default function AccountWorkspace() {
         <IdChip id={account.account_id} testid="account-workspace-id" large />
         <TypeBadge type={account.type} />
         <StatusBadge status={account.status} testid="account-workspace-status" />
-        <select value={account.status} onChange={(e) => setStatus(e.target.value)} data-testid="account-status-select" className="ml-auto border border-line rounded-md px-3 py-2 text-sm bg-white">
-          <option value="trial">Trial</option><option value="subscribed">Subscribed</option><option value="suspended">Suspended</option>
-        </select>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <ReportDownload endpoint={`/admin/accounts/${account.account_id}/report`} testid="account-report" />
+          <select value={account.status} onChange={(e) => setStatus(e.target.value)} data-testid="account-status-select" className="border border-line rounded-md px-3 py-2 text-sm bg-white">
+            <option value="trial">Trial</option><option value="subscribed">Subscribed</option><option value="suspended">Suspended</option>
+          </select>
+        </div>
       </div>
 
       <div className="flex gap-1 overflow-x-auto border-b border-line mb-6" role="tablist">

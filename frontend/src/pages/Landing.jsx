@@ -10,6 +10,7 @@ import { DemoForm } from "../components/landing/DemoForm";
 import { AudienceTabs } from "../components/landing/AudienceTabs";
 import { ScribeProof } from "../components/landing/ScribeProof";
 import { WhiteLabelPreview } from "../components/landing/WhiteLabelPreview";
+import { LanguageToggle } from "../components/LanguageToggle";
 
 const DOCTOR_IMG = "https://images.unsplash.com/photo-1758691463000-08b98131daf3?crop=entropy&cs=srgb&fm=jpg&q=80&w=1400";
 
@@ -62,6 +63,7 @@ export default function Landing() {
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-2">
+            <LanguageToggle testid="landing-language-toggle" />
             <button onClick={() => navigate("/auth/clinician")} data-testid="clinician-login-btn" className="btn-outline hidden sm:inline-flex">
               <Stethoscope className="h-4 w-4" /> Clinicians
             </button>

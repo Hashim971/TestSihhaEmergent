@@ -53,7 +53,7 @@ export function AccountSwitcher() {
         ) : <ChevronDown className="h-3.5 w-3.5 text-ink-soft" />}
       </button>
       {open && (
-        <div className="absolute left-0 right-0 mt-2 bg-white border border-line rounded-xl shadow-lg z-40 overflow-hidden fade-up" data-testid="account-switcher-menu">
+        <div className="absolute inset-x-0 mt-2 bg-white border border-line rounded-xl shadow-lg z-40 overflow-hidden fade-up" data-testid="account-switcher-menu">
           <div className="p-2 border-b border-line flex items-center gap-2">
             <Search className="h-3.5 w-3.5 text-ink-soft ml-1" />
             <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or ID"

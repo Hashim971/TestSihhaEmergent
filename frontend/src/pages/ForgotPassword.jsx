@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { Leaf, Mail, Send, ArrowLeft } from "lucide-react";
 import { formatApiErrorDetail } from "./ResetPassword";
+import { LanguageToggle } from "../components/LanguageToggle";
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
@@ -63,7 +64,8 @@ export default function ForgotPassword() {
 
 export function AuthShell({ children }) {
   return (
-    <div className="min-h-screen bg-sand flex items-center justify-center px-6">
+    <div className="min-h-screen bg-sand flex items-center justify-center px-6 relative">
+      <div className="absolute top-4 end-4"><LanguageToggle testid="auth-shell-language-toggle" /></div>
       <div className="w-full max-w-md fade-up">
         <Link to="/" className="flex items-center justify-center gap-2 mb-8" data-testid="auth-shell-logo">
           <div className="h-10 w-10 rounded-full bg-forest flex items-center justify-center">

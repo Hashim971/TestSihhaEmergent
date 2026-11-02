@@ -1,0 +1,55 @@
+name: Mobile test builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: "Web address the app opens (your live or staging URL, https://...)"
+        required: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm install
+      - run: npm run set-url -- "${{ github.event.inputs.app_url }}"
+      - run: ([ -d android ] || npx cap add android) && npx cap sync android && chmod +x android/gradlew
+      - run: cp ../frontend/public/icon-512.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+      - run: cd android && ./gradlew assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sihha-android-test-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+
+  ios-simulator:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run set-url -- "${{ github.event.inputs.app_url }}"
+      - run: ([ -d ios ] || npx cap add ios) && npx cap sync ios
+      - run: >
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug
+          -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=NO
+      - run: cd build/Build/Products/Debug-iphonesimulator && zip -r ../../../../sihha-ios-simulator.zip App.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sihha-ios-simulator-build
+          path: mobile/sihha-ios-simulator.zip

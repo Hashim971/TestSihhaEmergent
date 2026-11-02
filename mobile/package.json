@@ -1,0 +1,17 @@
+{
+  "name": "sihha-mobile",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Native iOS and Android shells for Sihha AI (Capacitor)",
+  "scripts": {
+    "set-url": "node scripts/set-url.js",
+    "android": "npx cap add android && npx cap sync android",
+    "ios": "npx cap add ios && npx cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/cli": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/ios": "^6.1.2"
+  }
+}

@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { Leaf, Mail, Lock, User, LogIn, UserPlus, Stethoscope } from "lucide-react";
 import { BrandMark } from "../components/BrandMark";
+import { LanguageToggle } from "../components/LanguageToggle";
 import { usePlatform } from "../context/PlatformContext";
 
 function formatApiErrorDetail(detail) {
@@ -90,7 +91,8 @@ export default function Auth({ portal = "patient" }) {
   }
 
   return (
-    <div className="min-h-screen bg-sand flex items-center justify-center px-6">
+    <div className="min-h-screen bg-sand flex items-center justify-center px-6 relative">
+      <div className="absolute top-4 end-4"><LanguageToggle testid="auth-language-toggle" /></div>
       <div className="w-full max-w-md fade-up">
         <Link to="/" className="flex items-center justify-center gap-2 mb-8" data-testid="auth-logo-link">
           <BrandMark size="lg" suffix={isDoctorPortal ? " for Clinicians" : ""} testid="auth-brand" />
