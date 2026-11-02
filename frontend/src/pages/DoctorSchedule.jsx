@@ -168,10 +168,10 @@ export default function DoctorSchedule() {
             >
               <div className="w-32 shrink-0">
                 <p className="font-semibold text-sm">
-                  {new Date(e.scheduled_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                  {new Date(e.scheduled_at).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "Asia/Riyadh" })}
                 </p>
                 <p className="text-xs text-ink-soft">
-                  {new Date(e.scheduled_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+                  {new Date(e.scheduled_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Riyadh" })}
                 </p>
               </div>
               <div className="flex-1 min-w-0">

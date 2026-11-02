@@ -1,0 +1,43 @@
+{
+  "summary": "Retest of the iteration-19 fixes plus a quick regression. Backend: 11 new pytest checks plus the iteration-19 suite give 29 passed and 1 skipped (fixes 3, 4, 5-backend, 8 and 9 verified). Frontend (Playwright): (1) the consent dialog is portalled to body, centred at 390x844 (card 16,184 358x477) and 1920x800 (736,194), the backdrop covers the sidebar, and outside click and X both close it. (2) /find-care?specialty=Dermatology shows the hint and both listed hospitals. However the specialty is forwarded to /book, which then filters doctors and shows 'No clinician matches' (the dead end moved one step). (5) No duplicate when sending right after opening the thread; the badge shows. (6) WeekView shows the loading state, then the grid, with 20/42 cells shaded as open hours. (7) Reject, mark-paid and remove-staff dialogs plus the leave-hospital dialog all work, with no native dialogs; the Nahdi badge shows 'No End Date'. (10) The Arabic consent dialog, tier labels and sponsorship subtitle are translated, but 'no end date' and 'until' on the admin badge are not. Regression: share no/yes booking, portal ready -> completed, and mark-paid all persist correctly. Test data cleaned up; omar is on Al Noor with Dr. Layla and solo is standalone.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/booking (share_record=true)", "issue": "Takes about 2.8s through the preview ingress (share=false is much faster). _set_active_hospital loads every other-hospital doctor id and then runs update_many."},
+      {"endpoint": "POST /api/pharmacy-portal/orders/{id}/status and GET /api/pharmacy-portal/orders", "issue": "Each takes about 1.5s, so the portal UI looks stale for about 3s after an action. Likely N+1 lookups in the list."},
+      {"endpoint": "POST /api/booking, /api/chat/sessions, /api/pharmacy/checkout, PUT /api/profile/doctor", "issue": "require_not_pharmacist blocks only the pharmacist role. Doctors and admins can still call these patient endpoints (not required by the request; noted for completeness)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TriageCard -> FindCare -> BookVisit", "issue": "FindCare now lists all hospitals, but navigating to /book forwards specialty=<LLM specialty>. BookVisit prefills booking-specialty-input and filters /booking/doctors with it, so Jeddah plus Dermatology shows 'No clinician matches that search'. The screening CTA still dead-ends one page later.", "selector": "[data-testid='no-doctors']", "priority": "HIGH"},
+      {"component": "OrderThread (patient)", "issue": "The unread badge reappears with a stale count after the thread is opened and then closed. The unread prop isn't reset after the messages are fetched and marked read.", "selector": "[data-testid='order-thread-<id>-toggle']", "priority": "LOW"},
+      {"component": "Admin Pharmacies sponsor badge (Arabic)", "issue": "'no end date' and the 'until <date>' template are missing from ar.json, so the AR badge reads 'ذهبي · No End Date' / 'فضي · Until 12/2/2026'.", "selector": "[data-testid^='admin-pharmacy-sponsor-']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Modals", "issues": ["The staging banner sits above the modal backdrop (not dimmed), and clicks on it don't close the modal. This is cosmetic."]},
+      {"screen": "Doctor schedule", "issues": ["The List view renders visit times in the browser timezone (UTC in the test browser: a 10:30 Riyadh booking shows 07:30 AM), while WeekView uses Riyadh time. They are inconsistent.", "WeekView shows '1 visits' (pluralisation)."]},
+      {"screen": "Admin Pharmacies", "issues": ["Decline sponsorship has no confirmation (direct action), unlike reject and mark-paid."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter20_retest_fixes.py", "/app/backend/tests/test_iter19_findcare_pharmacy_portal.py", "/app/test_reports/pytest/pytest_iter20.xml"],
+  "action_items": [
+    "BookVisit: don't apply the screening's suggested specialty as a hard filter when arriving from /find-care with hospital=. Show it as a hint, or fall back to all doctors at that hospital when the filtered list is empty.",
+    "OrderThread: reset or hide the unread badge once the thread has been opened (local state or a callback to the parent).",
+    "Add the 'no end date' and 'until' strings to ar.json (or build the badge from translatable pieces).",
+    "Optional perf: speed up the share-yes booking path (_set_active_hospital) and the portal orders list/status endpoints.",
+    "Optional: make the DoctorSchedule List view format times in Asia/Riyadh like WeekView."
+  ],
+  "critical_code_review_comments": [
+    "ConfirmDialog: act() swallows errors, so the dialog closes even when the API fails (a toast shows). That's acceptable, but the user loses the typed reason on failure.",
+    "Several window.confirm calls remain (EncounterDetail, AdminAssignments, PeopleTab, ScribePanel, PatientSummaryPanel, UpcomingVisits, PrescriptionWriter). They are outside this request's scope but inconsistent with the new in-app dialogs.",
+    "require_not_pharmacist is a deny-list. A require_patient-style allow-list for patient-only endpoints would be safer."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter20_retest_fixes.py", "/app/backend/tests/iter20_ui_seed.py"],
+  "success_rate": {"backend": "100% (29/29, 1 skipped)", "frontend": "~88% (fix 2 is only half done because of the /book dead end; 10 is partial for the badge strings)"},
+  "seed_data_creation": "iter20_ui_seed.py and iter19_ui_seed.py created TEST_ pharmacies, applications, orders and staff for the UI runs. All of it was removed with cleanup_iter19.py. solo is standalone with no doctor; omar is on ACC-12AFFE with user_b1000ae5aad6.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run pytest on test_iter20_retest_fixes.py and test_iter19_findcare_pharmacy_portal.py (each cleans up after itself). For UI data: iter20_ui_seed.py (admin pharmacies dialogs) and iter19_ui_seed.py (an OTC order for solo), then run cleanup_iter19.py with backend/.env exported. Language is switched via localStorage 'sihha_lang'='ar'. Pharmacy login is at /auth/pharmacy (pharmacy-auth-email/password/submit). DoctorSchedule week view needs a click on schedule-view-week. The share-yes booking takes about 3s, so wait at least 4s before asserting toasts. Retest: /book?hospital=ACC-2BC6ED&specialty=Dermatology should list doctors."
+}

@@ -3,13 +3,17 @@ import { toast } from "sonner";
 import { MessageCircle, Send } from "lucide-react";
 import { api } from "../../lib/api";
 
-export function OrderThread({ base, me, testid, unread = 0 }) {
+export function OrderThread({ base, me, testid, unread: initialUnread = 0 }) {
   const [open, setOpen] = useState(false);
+  const [unread, setUnread] = useState(initialUnread);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => { setUnread(initialUnread); }, [initialUnread]);
+
   useEffect(() => {
+    if (open) setUnread(0);
     if (open) api.get(`${base}/messages`).then(({ data }) => setMessages((m) => {
       const ids = new Set(data.map((x) => x.message_id));
       return [...data, ...m.filter((x) => !ids.has(x.message_id))];

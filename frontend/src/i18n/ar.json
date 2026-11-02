@@ -1799,5 +1799,9 @@
 "The reason is shown to the pharmacy.": "يظهر السبب للصيدلية.",
 "Payment reference (optional)": "مرجع الدفع (اختياري)",
 "Remove": "إزالة",
-"They lose access to this pharmacy's orders.": "سيفقد الوصول إلى طلبات هذه الصيدلية."
+"They lose access to this pharmacy's orders.": "سيفقد الوصول إلى طلبات هذه الصيدلية.",
+"until": "حتى",
+"no end date": "بلا تاريخ انتهاء",
+"1 visit": "زيارة واحدة",
+"The pharmacy sees the request as declined.": "سترى الصيدلية أن الطلب مرفوض."
 }

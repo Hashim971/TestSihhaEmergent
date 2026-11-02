@@ -370,5 +370,14 @@ Answers "does this screening need a visit, and how does it get booked?" plus e-p
 
 ## Backlog
 - P1: t() templates for interpolated sentences (alert group labels, KPI subtitles); translate AI-generated content per language
-- P1: Week View, Vitals Trend Warnings, Pharmacist Inbox, Pharmacy Ad Console
+- P1: Vitals Trend Warnings
+- P1: Connect a payment provider for sponsorships (user will choose later; Stripe can't provision for SA). Hook: request_sponsorship / mark_sponsorship_paid in server.py
 - P2: Native push notifications/camera in the Capacitor shells (helps Apple review)
+
+## 2026-06 — Phase E: standalone patients, hospital finder, pharmacy portal, week view, new screening prompts
+- Standalone patient: users.account_id = active hospital (one at a time, nullable). accounts.listed_in_app/about/specialties/city (App listing tab in Super Admin workspace + /my-hospital, PATCH /api/account/listing). GET /api/care/hospitals, GET/PUT /api/profile/hospital (_set_active_hospital revokes other hospitals' grants, unassigns other-hospital doctor). /find-care page; TriageCard CTA → /find-care?report=. BookVisit ?hospital= filters doctors; ShareConsentDialog asks share yes/no (BookingIn.share_record; grant only if yes; encounters.record_shared). PUT /profile/doctor with a hospital doctor switches hospital; GET /doctors scoped to active hospital + independents.
+- Pharmacy portal (role "pharmacist", users.pharmacy_id/pharmacy_role): /auth/pharmacy (sign in + apply), /pharmacy-portal (order inbox, transitions in PORTAL_TRANSITIONS, reject needs note, alert + Resend email to patient), order_messages threads (patient + pharmacy), prescription image view. Super Admin /admin/pharmacies: approve/reject applications, invite/remove staff, sponsorship requests.
+- Sponsorship console /pharmacy-portal/sponsorship: tiers bronze/silver/gold (500/1200/2500 SAR, 30 days), sponsorship_requests; PAYMENT MOCKED — admin "Mark paid" activates; marketplace sorted by tier rank; stats.impressions counted on patient listing views.
+- Doctor schedule List/Week toggle (components/WeekView.jsx, clinic time).
+- Screening prompts replaced with user files agents/prompts/screening_chat_v1.md + screening_report_v1.md (report system prompt, subject context incl. dependents, prompt_version on reports).
+- ConfirmDialog/Modal (portal) replaces native prompts in new screens. Seed: backend/seed_marketplace_portal.py. Tests: iteration_19, iteration_20.

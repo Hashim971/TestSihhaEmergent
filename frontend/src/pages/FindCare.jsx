@@ -20,7 +20,7 @@ export default function FindCare() {
 
   const open = (h) => {
     const next = new URLSearchParams({ hospital: h.account_id, hospital_name: h.name });
-    ["report", "reason", "specialty"].forEach((k) => params.get(k) && next.set(k, params.get(k)));
+    ["report", "reason"].forEach((k) => params.get(k) && next.set(k, params.get(k)));
     navigate(`/book?${next.toString()}`);
   };
 

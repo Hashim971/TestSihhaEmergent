@@ -59,7 +59,8 @@ export default function AdminPharmacies() {
               <button onClick={() => setDialog({ title: `Mark ${r.reference} as paid?`, text: `${r.pharmacy_name} · ${r.tier_label} · ${r.amount_sar.toLocaleString()} SAR. The placement starts straight away.`, input: "Payment reference (optional)", confirmLabel: "Mark paid", testid: "mark-paid-dialog",
                 onConfirm: (reference) => act(() => api.post(`/admin/sponsorship-requests/${r.request_id}/mark-paid`, { reference }), "Sponsorship is live") })}
                 className="btn-primary !py-1.5 !px-3 text-xs" data-testid={`mark-paid-${r.request_id}`}>Mark paid</button>
-              <button onClick={() => act(() => api.post(`/admin/sponsorship-requests/${r.request_id}/decline`, { reason: "" }), "Request declined")}
+              <button onClick={() => setDialog({ title: `Decline ${r.reference}?`, text: "The pharmacy sees the request as declined.", confirmLabel: "Decline", danger: true, testid: "decline-sponsor-dialog",
+                onConfirm: () => act(() => api.post(`/admin/sponsorship-requests/${r.request_id}/decline`, { reason: "" }), "Request declined") })}
                 className="btn-outline !py-1.5 !px-3 text-xs" data-testid={`decline-sponsor-${r.request_id}`}>Decline</button>
             </span>
           </div>
@@ -85,7 +86,7 @@ function PharmacyRow({ p, act, setDialog }) {
       <div className="flex flex-wrap items-center gap-2">
         <p className="font-semibold">{p.name_en}</p>
         <span className="text-xs text-ink-soft">{p.fulfilment_mode === "in_app" ? "Orders in app" : "Hands off to its own site"}</span>
-        {p.sponsored && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-700 border-emerald-200 capitalize" data-testid={`admin-pharmacy-sponsor-${p.pharmacy_id}`}>{sp.tier} · {sp.active_until ? `until ${new Date(sp.active_until).toLocaleDateString()}` : "no end date"}</span>}
+        {p.sponsored && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-700 border-emerald-200 capitalize" data-testid={`admin-pharmacy-sponsor-${p.pharmacy_id}`}>{sp.tier} · {sp.active_until ? <>{"until"} <bdi>{new Date(sp.active_until).toLocaleDateString()}</bdi></> : "no end date"}</span>}
       </div>
       <div className="mt-2 flex flex-wrap gap-2">
         {p.staff.length === 0 && <span className="text-xs text-ink-soft">No staff accounts yet.</span>}

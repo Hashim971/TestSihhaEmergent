@@ -41,7 +41,7 @@ export function WeekView({ encounters, onOpen }) {
         <p className="font-semibold ms-2" data-testid="week-range-label">{label}</p>
         <p className="ms-auto text-xs text-ink-soft flex items-center gap-3">
           <span className="inline-flex items-center gap-1"><span className="h-3 w-3 rounded bg-sage/30 border border-sage/60" /> Open hours</span>
-          <span data-testid="week-visit-count">{visits.length} visits</span>
+          <span data-testid="week-visit-count">{visits.length === 1 ? "1 visit" : `${visits.length} visits`}</span>
         </p>
       </div>
       <div className="overflow-x-auto">

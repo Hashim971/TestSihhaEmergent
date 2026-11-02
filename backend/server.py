@@ -4403,8 +4403,11 @@ async def _set_active_hospital(user: dict, account_id: Optional[str]):
         doctor = await db.users.find_one({"user_id": user["assigned_doctor_user_id"]}, {"_id": 0, "account_id": 1})
         if (doctor or {}).get("account_id") and doctor["account_id"] != account_id:
             update.update(assigned_doctor_user_id=None, assigned_by="patient", assigned_at=iso())
+    granted = await db.care_grants.find({"patient_user_id": user["user_id"], "revoked": False},
+                                        {"_id": 0, "doctor_user_id": 1}).to_list(200)
     others = [d["user_id"] for d in await db.users.find(
-        {"role": "doctor", "account_id": {"$nin": [None, account_id]}}, {"_id": 0, "user_id": 1}).to_list(5000)]
+        {"user_id": {"$in": [g["doctor_user_id"] for g in granted]}, "account_id": {"$nin": [None, account_id]}},
+        {"_id": 0, "user_id": 1}).to_list(200)] if granted else []
     if others:
         await db.care_grants.update_many(
             {"patient_user_id": user["user_id"], "doctor_user_id": {"$in": others}, "revoked": False},
