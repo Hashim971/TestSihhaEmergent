@@ -146,7 +146,7 @@ class TestAdminAnalytics:
         d = r.json()
         assert len(d["points"]) == 3
         assert d["top_targets"][0] == {"target": "test27-btn", "clicks": 1}
-        assert d["snapshot"] and d["snapshot"]["session_id"] == SID and d["snapshot"]["until"] is not None
+        assert d["snapshot"] and d["snapshot"]["session_id"] == SID   # until is None since iter28: leave of 2s < 2.5s threshold
         mob = admin.get(f"{BASE_URL}/api/admin/analytics/heatmap", params={"path": PATH, "device": "mobile", "include_demo": True}, timeout=TIMEOUT).json()
         assert mob["points"] == [] and mob["snapshot"] is None
 

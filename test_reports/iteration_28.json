@@ -1,0 +1,38 @@
+{
+  "summary": "Retest of the post-iteration-27 analytics fixes plus a short regression after the DB reconnect. Backend: new test_iter28_analytics_fixes.py passes 17/17 and test_iter27 passes 18/18 (after I updated one assertion to match the new 2.5s rule). Most of the 10 requested items are confirmed working: owner check, path normalisation, snapshot choosing a stay of 2.5s or more, the leave event on hide/hard navigation/reload, header and portal/tour masking in the replay, the dead/rage burst rule with the 'div in guided-tour' target format, filters kept in the URL, scroll to top on route change at 390x844, all 5 screening steps in a live AI screening, logins, the Users tab and the checklist. Two real bugs were found. (1) The heatmap background renders the page with its main content invisible, so the /dashboard snapshot shows only the sidebar and header on both desktop and mobile. (2) The last batch of a page view is lost when the user leaves less than 5s after the tracker starts, because the final payload is over 60KB and is not sent with keepalive.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "_norm_path / normPath", "issue": "Edge cases still collapse to ':id': slugs made only of hex letters and hyphens with 12+ chars (e.g. '/h/faded-decade' -> '/h/:id') and snake_case words of 6+ chars after the underscore (e.g. '/screening_report' -> '/:id'). No current route is affected. Hospital slugs such as dar-al-shifa and al-noor stay unchanged, as required."},
+      {"endpoint": "POST /api/analytics/collect", "issue": "The owner check is find_one followed by upsert, which is not atomic. Two concurrent first batches from different users with the same session_id could both pass. Low risk."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AnHeatmap snapshot background", "issue": "The main content is invisible in the heatmap background. Only the sidebar and header render, and main is blank on desktop and mobile for /dashboard. Cause: when paused, rrweb's Replayer adds the 'rrweb-paused' class, which sets animation-play-state: paused. The '.fade-up' wrappers (e.g. main > div.space-y-8.fade-up, the tour tooltip) stay frozen at their first animation frame with computed opacity 0. I confirmed this in the iframe: html class ':hover rrweb-paused', fade-up opacity '0', paused. The snapshot itself is now correct: for desktop it picked as_jd1fw99btaqmvznv6at t..until (11.2s stay) and the Dashboard nav is active. Fix: after replayer.pause(...), add a style to replayer.iframe.contentDocument.head such as `*{animation:none!important;transition:none!important}` or `.fade-up{opacity:1!important;transform:none!important}`.", "selector": "[data-testid='analytics-heatmap'] iframe", "priority": "MEDIUM"},
+      {"component": "lib/analytics.js flush(final)", "issue": "The final batch is lost when someone leaves a page before the first 5s interval flush. The pending payload includes the rrweb full snapshot (~116-150KB with inlineStylesheet). That is over the 60000 byte keepalive limit, so the code falls back to api.post, and the browser cancels that request on unload. The pageview, leave and replay of that view are all dropped. Reproduced: on /chat, a 3s stay followed by a reload left no pageview or leave in the DB for that view (session as_9yrvxvq187fmvznwxio). A view of 8s or more was recorded correctly. Fix: on final flush, send the events with keepalive or sendBeacon separately from the replay (events are small), and split the replay into keepalive chunks under 60KB. Or flush right after the first full snapshot is emitted.", "selector": "n/a", "priority": "MEDIUM"},
+      {"component": "GuidedTour Skip/Done", "issue": "The tour overlay stays up for about 1.8-3.5s after 'Skip tour' because it only closes after POST /getting-started returns. Taps in that window land on the overlay; they were recorded as dead and rage clicks on 'guided-tour'. Fix: close it optimistically, e.g. setGs({...gs, tour_done: true}) before the API call.", "selector": "[data-testid='guided-tour-skip-btn']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter28_analytics_fixes.py", "/app/backend/tests/test_iter27_analytics_getting_started.py", "/app/test_reports/pytest/pytest_iter28.xml"],
+  "action_items": [
+    "AnHeatmap: stop the paused rrweb iframe from freezing .fade-up animations at opacity 0 (inject an animation:none / opacity:1 style after pause)",
+    "analytics.js: send the final flush events with keepalive/sendBeacon separately from the large replay payload (or chunk the replay under 60KB) so short exit pages keep their pageview and leave",
+    "GuidedTour: close the overlay optimistically on Skip/Done",
+    "Optional: make _ID_SEGMENT/normPath stricter (require a digit for the hex/uuid branch; restrict prefix_ ids to known prefixes)"
+  ],
+  "critical_code_review_comments": [
+    "The visible leave/since reset works, but a hide->show->route-change cycle sends two leave events for one pageview. Avg time then means time per visible stretch, not per view.",
+    "The frustration list still shows old-format rows ('getting-started', 'guided-tour' dead) recorded before the fix. They will age out under 30-day retention.",
+    "Users created with @example.com are stored as is_demo=true, so test data only shows up with 'Include demo'. That is good for keeping test data out of real stats."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter28_analytics_fixes.py", "/app/backend/tests/test_iter27_analytics_getting_started.py (test_heatmap: until is now None for a 2s leave, per the new 2.5s rule)"],
+  "success_rate": {"backend": "100% (35/35)", "frontend": "80% (8 of 10 requested items fully pass; heatmap background and leave-on-short-exit partially fail)"},
+  "seed_data_creation": "Registered test patients test_iter28_*@example.com (stored as demo). Analytics test sessions as_t28* on /zz* paths and /x/*, plus a live screening for solo.patient.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use /tmp-style Motor queries with backend/.env (Mongo access works now) to inspect analytics_events by session_id. Simulate hiding with Object.defineProperty(document,'visibilityState') plus a dispatched visibilitychange. Check the heatmap iframe with contentDocument (look for the rrweb-paused class and .fade-up opacity). Export REACT_APP_BACKEND_URL before running pytest.",
+  "rca of the issue": "Heatmap blank main: Replayer.pause() adds html.rrweb-paused, which pauses CSS animations, so elements using the fadeUp keyframes stay at opacity 0. Lost exit data: flush(final) sends anything over 60KB with a normal XHR, which the browser aborts on unload, and the first batch of every page load holds the ~120KB full snapshot."
+}
