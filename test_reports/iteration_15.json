@@ -1,0 +1,48 @@
+{
+  "summary": "Tested staging env, super admin console (accounts list/search/filters/export/add, account switcher, Ctrl+K quick nav, workspace tabs: overview/staff/customers/branding/logo/features/domain/import/onboarding/status), global feature switches, white-label tenant preview + tenant registration, hospital-admin /my-hospital, landing page (desktop + 390px), PWA assets/SW, and XFF-spoof login lockout regression. Backend: 19/19 pytest pass. Frontend: all requested flows work; one functional gap (feature flags are cosmetic only - no route/API enforcement) and a few minor UI issues.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "pharmacy/booking/etc. feature endpoints", "issue": "Feature flags are not enforced server-side. With pharmacy_marketplace OFF, only nav-pharmacy is hidden; no backend dependency checks effective_flags, so the APIs keep working (grep: effective_flags only used in /flags, /tenant, admin views)."},
+      {"endpoint": "_account_overview checklist", "issue": "'Default language chosen' is always done because create_account sets default_language='ar' by default - checklist step is meaningless (new account shows 2/8 done immediately)."},
+      {"endpoint": "POST /api/admin/accounts/{id}/users", "issue": "Inviting an existing email silently overwrites that user's global role (e.g. existing patient becomes doctor) without the clinician approval flow. Admin-only, but worth a confirm/guard."},
+      {"endpoint": "GET /api/tenant/{id}/logo", "issue": "get_object() is a sync storage call inside an async route (blocks event loop)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "App routes / feature flags", "issue": "With pharmacy_marketplace OFF, patient omar can still open /pharmacy directly by URL (no route guard).", "selector": "nav-pharmacy", "priority": "MEDIUM"},
+      {"component": "AccountWorkspace", "issue": "When accountId changes (quick-nav person click or switcher from another account), the previous account's title and an empty PeopleTab (queried with the OLD account_id) are shown for ~1-1.5s before refreshing. State is not reset on accountId change and there is no stale-request guard (possible race if responses arrive out of order).", "selector": "account-title, customers-count", "priority": "LOW"},
+      {"component": "Onboarding page after tenant registration", "issue": "After registering on /auth?tenant=ACC-..., /onboarding shows hardcoded 'Sihha AI' brand instead of tenant brand (Onboarding.jsx line ~70 does not use BrandMark).", "selector": "pages/Onboarding.jsx", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Landing mobile 390px header", "issues": ["Brand name truncated to 'Sihh...' next to Clinicians/Sign in buttons"]},
+      {"screen": "Landing mobile audience tabs", "issues": ["'Hospitals' tab is cut off at the right edge (scrollable container, but no visual cue); audience tabs have no aria-selected"]},
+      {"screen": "Admin console at 1920px", "issues": ["Content capped at ~1220px and left-aligned, leaving a large empty right area"]},
+      {"screen": "People tab", "issues": ["Pluralisation: '1 customers'"]},
+      {"screen": "Staging bar", "issues": ["Bar renders only after /api/env resolves (absent for ~1s on first load)"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_superadmin_staging_iter15.py", "/app/backend/tests/cleanup_iter15.py", "/app/test_reports/pytest/pytest_iter15.xml"],
+  "action_items": [
+    "Enforce feature flags: add a backend dependency (e.g. require_feature('pharmacy_marketplace')) on gated routes and a frontend route guard that redirects when isOn(key) is false",
+    "AccountWorkspace: reset account/overview state when accountId changes and ignore stale responses",
+    "Use tenant BrandMark on Onboarding (and other post-login pages) during tenant preview",
+    "Fix 'Default language chosen' checklist logic (track explicit choice)",
+    "Mobile landing header: avoid brand name truncation; add scroll hint/wrap for audience tabs"
+  ],
+  "critical_code_review_comments": [
+    "server.py is 4165 lines - split super-admin/white-label section into its own router module",
+    "Feature flags only drive UI nav visibility; not a security/entitlement boundary as implemented",
+    "invite_account_user/update_account_user can change global role patient<->doctor, bypassing the clinician approval path",
+    "Account-level login lockout (10 fails, any IP) lets anyone lock out a known email for 15 min (accepted trade-off, documented)"
+  ],
+  "updated_files": ["/app/backend/tests/test_superadmin_staging_iter15.py", "/app/backend/tests/cleanup_iter15.py"],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "~92% (all requested flows pass; flag route guard missing)"},
+  "test_credentials": "admin@sihha.ai/Admin@123 (/auth/clinician), dr.layla@sihha.ai/Doctor@123, omar.patient@sihha.ai/Patient@123 - all worked",
+  "seed_data_creation": "Created and then removed: QA accounts (QA Test xxxx, QA UI Hospital ACC-133534), qa.*@example.com / delivered+qa*@resend.dev users, imported records, demo requests. Global flags restored (pharmacy_marketplace=true, white_label default off). Seeded Al Noor/Jeddah/Eastern untouched. No spoofcheck lockout rows remain.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Al Noor = ACC-12AFFE (white_label override on), Jeddah = ACC-2BC6ED, Eastern = ACC-A84A0F. Run pytest tests/test_superadmin_staging_iter15.py (~75s) then python tests/cleanup_iter15.py. Retest: /pharmacy direct URL with flag off (should redirect) and gated API returns 403/404; AccountWorkspace switching no stale flash."
+}

@@ -28,6 +28,7 @@ import FeatureFlags from "./pages/admin/FeatureFlags";
 import MyHospital from "./pages/MyHospital";
 import { PlatformProvider } from "./context/PlatformContext";
 import { StagingBar } from "./components/StagingBar";
+import { FeatureRoute } from "./components/FeatureRoute";
 import Intake from "./pages/Intake";
 import EncounterDetail from "./pages/EncounterDetail";
 import Settings from "./pages/Settings";
@@ -66,15 +67,15 @@ function AppRouter() {
           <Route path="/onboarding" element={<Onboarding />} />
           <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/chat" element={<HealthChat />} />
-            <Route path="/pill-id" element={<PillIdentify />} />
+            <Route path="/chat" element={<FeatureRoute flag="health_chat"><HealthChat /></FeatureRoute>} />
+            <Route path="/pill-id" element={<FeatureRoute flag="pill_id"><PillIdentify /></FeatureRoute>} />
             <Route path="/medications" element={<Medications />} />
             <Route path="/dependents" element={<Dependents />} />
-            <Route path="/visits" element={<VisitSummaries />} />
-            <Route path="/book" element={<BookVisit />} />
-            <Route path="/prescriptions" element={<Prescriptions />} />
-            <Route path="/pharmacy" element={<Pharmacy />} />
-            <Route path="/pharmacy/orders" element={<PharmacyOrders />} />
+            <Route path="/visits" element={<FeatureRoute flag="visit_summaries"><VisitSummaries /></FeatureRoute>} />
+            <Route path="/book" element={<FeatureRoute flag="booking"><BookVisit /></FeatureRoute>} />
+            <Route path="/prescriptions" element={<FeatureRoute flag="prescriptions"><Prescriptions /></FeatureRoute>} />
+            <Route path="/pharmacy" element={<FeatureRoute flag="pharmacy_marketplace"><Pharmacy /></FeatureRoute>} />
+            <Route path="/pharmacy/orders" element={<FeatureRoute flag="pharmacy_marketplace"><PharmacyOrders /></FeatureRoute>} />
             <Route path="/doctor" element={<DoctorDashboard />} />
             <Route path="/doctor/patients" element={<DoctorPortal />} />
             <Route path="/doctor/schedule" element={<DoctorSchedule />} />

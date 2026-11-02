@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ChevronLeft, FlaskConical } from "lucide-react";
 import { toast } from "sonner";
@@ -34,18 +34,27 @@ export default function AccountWorkspace() {
   const [error, setError] = useState(null);
   const tab = params.get("tab") || "overview";
 
+  const currentId = useRef(accountId);
+  currentId.current = accountId;
+
   const load = useCallback(async () => {
     try {
       const [a, o] = await Promise.all([api.get(`/admin/accounts/${accountId}`), api.get(`/admin/accounts/${accountId}/overview`)]);
+      if (currentId.current !== accountId) return;
       setAccount(a.data);
       setOverview(o.data);
       rememberAccount(a.data);
     } catch (e) {
-      setError(errorText(e, "Account not found"));
+      if (currentId.current === accountId) setError(errorText(e, "Account not found"));
     }
   }, [accountId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    setAccount(null);
+    setOverview(null);
+    setError(null);
+    load();
+  }, [load]);
 
   const onSaved = (a) => { setAccount(a); api.get(`/admin/accounts/${accountId}/overview`).then(({ data }) => setOverview(data)); };
 

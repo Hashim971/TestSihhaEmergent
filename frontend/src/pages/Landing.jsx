@@ -55,7 +55,7 @@ export default function Landing() {
       <header className={`sticky z-30 border-b ${scrolled ? "bg-white/85 backdrop-blur-xl border-line" : "bg-transparent border-transparent"}`}
         style={{ top: "var(--env-bar, 0px)", transition: "background-color 0.3s ease, border-color 0.3s ease" }}>
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-6">
-          <BrandMark testid="landing-brand" />
+          <span className="shrink-0"><BrandMark testid="landing-brand" /></span>
           <nav className="hidden lg:flex items-center gap-7 text-sm text-ink-soft ml-6">
             {[["#platform", "Platform"], ["#scribe", "AI scribe"], ["#hospitals", "For hospitals"], ["#safety", "Safety"]].map(([href, label]) => (
               <a key={href} href={href} className="hover:text-forest" data-testid={`landing-nav-${href.slice(1)}`} style={{ transition: "color 0.2s ease" }}>{label}</a>

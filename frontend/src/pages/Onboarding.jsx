@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import YesNo from "../components/YesNo";
 import { Leaf, Check, ChevronLeft, ChevronRight, Activity } from "lucide-react";
+import { BrandMark } from "../components/BrandMark";
 
 const STEPS = ["Account", "General", "Health History", "Medications", "Lifestyle"];
 
@@ -64,10 +65,7 @@ export default function Onboarding() {
     <div className="min-h-screen bg-sand py-10 px-6" data-testid="onboarding-page">
       <div className="max-w-3xl mx-auto">
         <div className="flex items-center justify-center gap-2 mb-10">
-          <div className="h-9 w-9 rounded-full bg-forest flex items-center justify-center">
-            <Leaf className="h-5 w-5 text-sage" />
-          </div>
-          <span className="font-heading font-bold text-xl text-forest">Sihha AI</span>
+          <BrandMark testid="onboarding-brand" />
         </div>
 
         {/* Step indicator */}

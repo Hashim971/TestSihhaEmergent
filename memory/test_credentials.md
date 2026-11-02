@@ -43,3 +43,11 @@ All accounts use standard email/password JWT auth (httpOnly cookies).
   Tokens are stored only as sha256 hashes in `password_reset_tokens`; to test a reset, insert a row with a known raw token (see `/app/scripts/phase_b_probe.py`).
   Seeded `@sihha.ai` addresses are undeliverable — the send fails silently (logged) and the reply stays generic.
 - Google sign-in: patient page only (`google-signin-btn`). Backend POST `/api/auth/google/session {session_id}`; clinician emails get 403.
+
+## Super admin / hospital accounts (staging, added Jun 2026)
+- Super admin = `admin@sihha.ai` / `Admin@123` (sign in at /auth/clinician, then sidebar "Super Admin" or /admin/accounts).
+- APP_ENV secret: test slot "staging" (preview), live slot "production". White-label tabs/endpoints only work when staging.
+- Seeded sample accounts (staging only, created once): "Al Noor Specialist Hospital" (white_label on, branding Al Noor Care),
+  "Jeddah Family Clinics", "Eastern Health Group". IDs are random ACC-XXXXXX — look them up via GET /api/admin/accounts.
+- dr.layla@sihha.ai is account_admin of Al Noor → sees "My Hospital" (/my-hospital). omar/noura patients are its customers.
+- Tenant preview: /auth?tenant=ACC-XXXXXX applies that hospital's branding (staging only); exit via the staging bar X.

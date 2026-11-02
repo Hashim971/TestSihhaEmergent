@@ -17,8 +17,16 @@ export function applyBrandColors(primary, accent) {
   root.setProperty("--brand-accent", hexToTriplet(accent) || DEFAULT_ACCENT);
 }
 
+const ENV_KEY = "sihha_env";
+
 export function PlatformProvider({ children }) {
-  const [env, setEnv] = useState({ env: "", is_staging: false });
+  const [env, setEnv] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(ENV_KEY)) || { env: "", is_staging: false };
+    } catch {
+      return { env: "", is_staging: false };
+    }
+  });
   const [tenant, setTenant] = useState(null);
   const [flags, setFlags] = useState(null);
 
@@ -38,9 +46,13 @@ export function PlatformProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    document.documentElement.style.setProperty("--env-bar", env.is_staging ? "28px" : "0px");
+  }, [env.is_staging]);
+
+  useEffect(() => {
     api.get("/env").then(({ data }) => {
       setEnv(data);
-      document.documentElement.style.setProperty("--env-bar", data.is_staging ? "28px" : "0px");
+      localStorage.setItem(ENV_KEY, JSON.stringify(data));
     }).catch(() => {});
     loadTenant();
   }, [loadTenant]);

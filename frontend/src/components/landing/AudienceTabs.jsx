@@ -24,12 +24,12 @@ export function AudienceTabs() {
   const a = AUDIENCES[tab];
   return (
     <div className="mt-10 grid grid-cols-1 lg:grid-cols-12 gap-8" data-testid="audience-tabs">
-      <div className="lg:col-span-4 flex lg:flex-col gap-2 overflow-x-auto pb-1 -mx-1 px-1 max-w-full">
+      <div className="lg:col-span-4 grid grid-cols-3 lg:flex lg:flex-col gap-2" role="tablist">
         {Object.entries(AUDIENCES).map(([k, v]) => {
           const Icon = v.icon;
           return (
-            <button key={k} onClick={() => setTab(k)} data-testid={`audience-tab-${k}`}
-              className={`flex items-center gap-2 sm:gap-3 px-4 sm:px-5 py-3 sm:py-4 rounded-2xl text-left whitespace-nowrap border shrink-0 ${tab === k ? "bg-forest text-white border-forest" : "bg-white border-line hover:border-forest/30"}`}
+            <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} data-testid={`audience-tab-${k}`}
+              className={`flex flex-col sm:flex-row items-center gap-1.5 sm:gap-3 px-2 sm:px-5 py-3 sm:py-4 rounded-2xl text-center sm:text-left text-sm sm:text-base border ${tab === k ? "bg-forest text-white border-forest" : "bg-white border-line hover:border-forest/30"}`}
               style={{ transition: "background-color 0.25s ease, border-color 0.25s ease" }}>
               <Icon className="h-5 w-5" /> <span className="font-semibold">{v.label}</span>
             </button>

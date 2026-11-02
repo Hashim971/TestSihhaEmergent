@@ -74,7 +74,7 @@ export default function AdminLayout() {
           <NavLink to="/admin/accounts" className="text-xs font-medium text-forest" data-testid="admin-nav-accounts-mobile">Accounts</NavLink>
           <NavLink to="/admin/flags" className="text-xs font-medium text-forest" data-testid="admin-nav-flags-mobile">Switches</NavLink>
         </header>
-        <main className="p-4 sm:p-6 lg:p-10 max-w-7xl">
+        <main className="p-4 sm:p-6 lg:p-10 w-full max-w-[1600px]">
           <Outlet />
         </main>
       </div>

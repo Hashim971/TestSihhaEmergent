@@ -3726,7 +3726,7 @@ async def tenant_logo(account_id: str):
     path = (account.get("branding") or {}).get("logo_path")
     if not path:
         raise HTTPException(status_code=404, detail="No logo")
-    data, content_type = get_object(path)
+    data, content_type = await asyncio.to_thread(get_object, path)
     return Response(content=data, media_type=content_type, headers={"Cache-Control": "public, max-age=300"})
 
 
@@ -3794,6 +3794,7 @@ async def update_account(account_id: str, body: AccountPatch, admin=Depends(requ
     if update:
         update["updated_at"] = iso()
         await db.accounts.update_one({"account_id": account["account_id"]}, {"$set": update})
+        _flag_cache.pop(account["account_id"], None)
     return await get_account(account["account_id"], admin)
 
 
@@ -3804,7 +3805,7 @@ async def update_branding(account_id: str, body: BrandingPatch, admin=Depends(re
     data = body.model_dump(exclude_unset=True)
     update = {f"branding.{k}": v for k, v in data.items() if k in ("display_name", "primary_color", "accent_color")}
     if "default_language" in data and data["default_language"]:
-        update["default_language"] = data["default_language"]
+        update.update(default_language=data["default_language"], language_confirmed=True)
     if "custom_domain" in data:
         domain = (data["custom_domain"] or "").strip().lower() or None
         if domain and not re.match(DOMAIN_RE, domain):
@@ -3829,8 +3830,8 @@ async def upload_account_logo(account_id: str, file: UploadFile = File(...), adm
     if len(data) > 2 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Logo must be under 2 MB")
     ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg"}[file.content_type]
-    result = put_object(f"{STORAGE_APP}/branding/{account['account_id']}/{uuid.uuid4().hex}.{ext}", data,
-                        file.content_type)
+    result = await asyncio.to_thread(put_object, f"{STORAGE_APP}/branding/{account['account_id']}/{uuid.uuid4().hex}.{ext}",
+                                     data, file.content_type)
     await db.accounts.update_one({"account_id": account["account_id"]},
                                  {"$set": {"branding.logo_path": result["path"], "updated_at": iso()}})
     return await get_account(account["account_id"], admin)
@@ -3907,7 +3908,7 @@ async def _account_overview(account: dict) -> dict:
         {"key": "created", "label": "Account created with a unique ID", "done": True},
         {"key": "branding", "label": "Brand name and colours set", "done": bool(branding.get("display_name") and branding.get("primary_color"))},
         {"key": "logo", "label": "Logo uploaded", "done": bool(branding.get("logo_path"))},
-        {"key": "language", "label": "Default language chosen", "done": bool(account.get("default_language"))},
+        {"key": "language", "label": "Default language confirmed", "done": bool(account.get("language_confirmed"))},
         {"key": "features", "label": "Features chosen for this hospital", "done": bool(account.get("features"))},
         {"key": "staff", "label": "First staff member invited", "done": counts["staff"] > 0},
         {"key": "import", "label": "Existing patient data imported (optional)", "done": imported > 0, "optional": True},
@@ -3943,12 +3944,17 @@ async def invite_account_user(account_id: str, body: AccountUserIn, request: Req
     email = body.email.strip().lower()
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         raise HTTPException(status_code=422, detail="Enter a valid email address")
-    existing = await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1, "account_id": 1})
+    existing = await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1, "account_id": 1, "role": 1})
     if existing and existing.get("account_id") and existing["account_id"] != account["account_id"]:
         raise HTTPException(status_code=409, detail=f"This person already belongs to account {existing['account_id']}")
+    if existing and existing.get("role") != body.role:
+        raise HTTPException(status_code=409, detail=(
+            "This person already has a patient account. Approve clinician access in Doctor assignments first."
+            if body.role == "doctor" else "This person is a staff member — add them from the Staff tab."))
     fields = {"account_id": account["account_id"], "role": body.role, "account_role": body.account_role}
     if existing:
-        await db.users.update_one({"user_id": existing["user_id"]}, {"$set": fields})
+        await db.users.update_one({"user_id": existing["user_id"]},
+                                  {"$set": {"account_id": account["account_id"], "account_role": body.account_role}})
         return {"user_id": existing["user_id"], "invited": False, "linked": True}
     user_id = f"user_{uuid.uuid4().hex[:12]}"
     await db.users.insert_one({"user_id": user_id, "email": email, "name": body.name.strip(), "picture": None,
@@ -4078,6 +4084,7 @@ async def set_flag(key: str, body: FlagPatch, admin=Depends(require_admin)):
     await db.feature_flags.update_one({"key": key}, {"$set": {"key": key, "enabled": body.enabled,
                                                               "updated_by": admin["user_id"], "updated_at": iso()}},
                                       upsert=True)
+    _flag_cache.clear()
     return await admin_flags(admin)
 
 
@@ -4148,6 +4155,50 @@ async def seed_demo_accounts():
 
 
 app.include_router(api)
+
+FEATURE_ROUTES = [
+    (re.compile(r"^/api/chat(/|$)"), "health_chat"),
+    (re.compile(r"^/api/pills(/|$)"), "pill_id"),
+    (re.compile(r"^/api/booking(/|$)"), "booking"),
+    (re.compile(r"^/api/(prescriptions(/|$)|encounters/[^/]+/prescription$)"), "prescriptions"),
+    (re.compile(r"^/api/(patient/visit-summaries|artifacts/[^/]+/patient-summary)"), "visit_summaries"),
+    (re.compile(r"^/api/pharmacy(/|$)"), "pharmacy_marketplace"),
+    (re.compile(r"^/api/encounters/[^/]+/audio/live$"), "live_transcript"),
+]
+_flag_cache: dict = {}
+
+
+async def _flags_for_account(account_id: Optional[str]) -> dict:
+    cached = _flag_cache.get(account_id)
+    if cached and cached[0] > now_utc():
+        return cached[1]
+    account = await db.accounts.find_one({"account_id": account_id}, ACCOUNT_PROJECTION) if account_id else None
+    flags = await effective_flags(account)
+    _flag_cache[account_id] = (now_utc() + timedelta(seconds=15), flags)
+    return flags
+
+
+@app.middleware("http")
+async def enforce_feature_flags(request: Request, call_next):
+    """Switched-off features return 403 for the signed-in user's account; unauthenticated calls fall through to auth."""
+    key = next((k for pattern, k in FEATURE_ROUTES if pattern.match(request.url.path)), None)
+    token = request.cookies.get("access_token") or request.headers.get("Authorization", "").removeprefix("Bearer ")
+    if key and token:
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        except jwt.PyJWTError:
+            payload = None
+        if payload and payload.get("type") == "access":
+            try:
+                user = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0, "account_id": 1})
+                flags = await _flags_for_account((user or {}).get("account_id"))
+            except DB_DOWN_ERRORS:
+                return JSONResponse(status_code=503, content={"detail": "Service temporarily unavailable",
+                                                              "code": "service_unavailable"})
+            if not flags.get(key, True):
+                return JSONResponse(status_code=403, content={"detail": "This feature is turned off for your organisation",
+                                                              "code": "feature_disabled"})
+    return await call_next(request)
 
 CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
 if "*" in CORS_ORIGINS:
