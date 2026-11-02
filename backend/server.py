@@ -4,6 +4,8 @@ import uuid
 import logging
 import re
 import random
+import time
+from PIL import Image, ImageOps
 import base64
 import asyncio
 import tempfile
@@ -138,6 +140,12 @@ def set_auth_cookies(response: Response, access: str, refresh: str):
                         samesite="lax", max_age=604800, path="/")
 
 
+async def _record_activity(user_id: str):
+    day = now_utc().strftime("%Y-%m-%d")
+    await db.user_activity_days.update_one({"user_id": user_id, "day": day}, {"$setOnInsert": {"user_id": user_id, "day": day}},
+                                           upsert=True)
+
+
 async def get_current_user(request: Request):
     token = request.cookies.get("access_token")
     if not token:
@@ -157,6 +165,9 @@ async def get_current_user(request: Request):
     user = await db.users.find_one({"user_id": payload["sub"]}, USER_PROJECTION)
     if not user or token_predates_password_change(payload, user):
         raise HTTPException(status_code=401, detail="User not found")
+    if (user.get("last_seen_at") or "") < iso(now_utc() - timedelta(minutes=10)):
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"last_seen_at": iso()}})
+        await _record_activity(user["user_id"])
     user["_dependent_ids"] = [d["dependent_id"] for d in await db.dependents.find(
         {"user_id": user["user_id"]}, {"_id": 0, "dependent_id": 1}).to_list(50)]
     return with_capabilities(user)
@@ -231,6 +242,8 @@ async def login(body: LoginRequest, request: Request, response: Response):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     await db.login_attempts.delete_many({"identifier": {"$in": [identifier, account_key]}})
     set_auth_cookies(response, create_access_token(user["user_id"], email), create_refresh_token(user["user_id"]))
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"last_login_at": iso(), "last_seen_at": iso()}})
+    await _record_activity(user["user_id"])
     return with_capabilities(await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION))
 
 
@@ -490,6 +503,7 @@ async def seed_and_index():
     await db.feature_flags.create_index("key", unique=True)
     if IS_STAGING:
         await seed_demo_accounts()
+        await seed_demo_hospital()
     await db.consultation_audio.create_index([("deleted_at", 1), ("retention_expires_at", 1)])
     await db.catalog_items.create_index([("pharmacy_id", 1), ("active", 1)])
     await db.catalog_items.create_index([("name_en", "text"), ("name_ar", "text"), ("generic_name", "text")])
@@ -993,7 +1007,8 @@ async def list_chat_messages(sid: str, user=Depends(get_current_user)):
 
 
 class ChatMessageIn(BaseModel):
-    text: str
+    text: str = Field(default="", max_length=4000)
+    photo_id: Optional[str] = Field(default=None, max_length=40)
 
 
 @api.post("/chat/sessions/{sid}/message")
@@ -1002,16 +1017,22 @@ async def send_chat_message(sid: str, body: ChatMessageIn, user=Depends(get_curr
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    if not body.text.strip() and not body.photo_id:
+        raise HTTPException(status_code=422, detail="Type a message or attach a photo")
+    photo, kept = (await _take_chat_photo(body.photo_id, sid, user)) if body.photo_id else (None, False)
     await db.chat_messages.insert_one({
         "message_id": f"msg_{uuid.uuid4().hex[:12]}",
         "chat_session_id": sid,
         "role": "user",
         "content": body.text,
+        "photo_id": body.photo_id if kept else None,
+        "photo_discarded": bool(photo) and not kept,
         "created_at": iso(),
     })
 
     history = await db.chat_messages.find({"chat_session_id": sid}, {"_id": 0}).sort("created_at", 1).to_list(100)
-    context = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history[:-1]][-30:])
+    context = "\n".join([f"{m['role'].upper()}: {'[attached a photo] ' if m.get('photo_id') or m.get('photo_discarded') else ''}{m['content']}"
+                         for m in history[:-1]][-30:])
     system = SCREENING_SYSTEM_PROMPT + await screening_subject_context(user, session["profile_id"])
     if context:
         system += "\n\nConversation so far:\n" + context
@@ -1021,7 +1042,13 @@ async def send_chat_message(sid: str, body: ChatMessageIn, user=Depends(get_curr
     async def event_generator():
         full = []
         try:
-            async for ev in chat.stream_message(UserMessage(text=body.text)):
+            message = UserMessage(text=body.text)
+            if photo:
+                message = UserMessage(
+                    text=(body.text.strip() or "Here is a photo.") + "\n\n[The patient attached a photo. Describe only what "
+                    "is visible and relevant to the screening, ask a follow-up question, and never diagnose from a photo alone.]",
+                    file_contents=[ImageContent(image_base64=base64.b64encode(photo).decode())])
+            async for ev in chat.stream_message(message):
                 if isinstance(ev, TextDelta):
                     full.append(ev.content)
                     yield f"data: {json.dumps({'delta': ev.content})}\n\n"
@@ -1065,6 +1092,7 @@ async def generate_report(sid: str, user=Depends(get_current_user)):
         "user_id": user["user_id"],
         "profile_id": session["profile_id"],
         "content": result,
+        "photo_ids": [p["photo_id"] for p in await db.chat_photos.find({"chat_session_id": sid}, {"_id": 0, "photo_id": 1}).to_list(20)],
         "prompt_version": f"report-{SCREENING_REPORT_VERSION}/chat-{SCREENING_PROMPT_VERSION}",
         "generated_at": iso(),
     }
@@ -3814,6 +3842,8 @@ class BrandingPatch(BaseModel):
     accent_color: Optional[str] = Field(default=None, pattern=HEX_COLOR)
     default_language: Optional[str] = Field(default=None, pattern="^(ar|en)$")
     custom_domain: Optional[str] = Field(default=None, max_length=253)
+    slug: Optional[str] = Field(default=None, pattern="^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
+    tagline: Optional[str] = Field(default=None, max_length=120)
 
 
 class AccountUserIn(BaseModel):
@@ -3845,11 +3875,14 @@ async def my_flags(user=Depends(get_current_user)):
 
 
 @api.get("/tenant")
-async def resolve_tenant(host: Optional[str] = None, account: Optional[str] = None):
+async def resolve_tenant(host: Optional[str] = None, account: Optional[str] = None, slug: Optional[str] = None):
     """Public branding lookup for white-label sites (staging only): by custom web address or account ID."""
     found = None
     if IS_STAGING and host:
         row = await db.accounts.find_one({"custom_domain": host.strip().lower()}, {"_id": 0, "account_id": 1})
+        found = await _active_tenant(row["account_id"]) if row else None
+    if IS_STAGING and not found and slug:
+        row = await db.accounts.find_one({"slug": slug.strip().lower()}, {"_id": 0, "account_id": 1})
         found = await _active_tenant(row["account_id"]) if row else None
     if IS_STAGING and not found and account:
         found = await _active_tenant(account)
@@ -3864,6 +3897,10 @@ async def resolve_tenant(host: Optional[str] = None, account: Optional[str] = No
         "default_language": found.get("default_language") or "en",
         "logo_url": f"/api/tenant/{found['account_id']}/logo" if branding.get("logo_path") else None,
         "features": await effective_flags(found),
+        "slug": found.get("slug"),
+        "tagline": found.get("tagline"),
+        "city": found.get("city"),
+        "demo_logins": found.get("demo_logins") or [],
     }}
 
 
@@ -3961,6 +3998,12 @@ async def update_branding(account_id: str, body: BrandingPatch, admin=Depends(re
             raise HTTPException(status_code=409, detail="That web address is already used by another account")
         if domain != account.get("custom_domain"):
             update.update(custom_domain=domain, domain_verified=False)
+    if data.get("slug") and await db.accounts.find_one({"slug": data["slug"], "account_id": {"$ne": account["account_id"]}}):
+        raise HTTPException(status_code=409, detail="That sign-in address is already used by another account")
+    if data.get("slug"):
+        update["slug"] = data["slug"]
+    if "tagline" in data:
+        update["tagline"] = (data["tagline"] or "").strip() or None
     if update:
         update["updated_at"] = iso()
         await db.accounts.update_one({"account_id": account["account_id"]}, {"$set": update})
@@ -5337,6 +5380,223 @@ async def portal_update_licences(body: LicencesIn, user=Depends(require_pharmaci
     pharmacy = await db.pharmacies.find_one({"pharmacy_id": user["pharmacy_id"]}, {"_id": 0})
     return {"licences": {k: pharmacy.get(k) for k in compliance.REQUIRED_PHARMACY_LICENCES},
             "pharmacy_problems": [v["message"] for v in compliance.check_pharmacy(pharmacy)]}
+
+
+# ---------- Demo white-label hospital (staging) ----------
+DEMO_HOSPITAL_SLUG = "dar-al-shifa"
+DEMO_PASSWORD = "Demo@123"
+DEMO_HOSPITAL = {
+    "name": "Dar Al Shifa Medical Center", "type": "hospital", "status": "subscribed", "city": "Riyadh",
+    "branding": {"display_name": "Dar Al Shifa", "primary_color": "#7A1F3D", "accent_color": "#D9A441"},
+    "about": "A 300-bed hospital in north Riyadh with same-week cardiology, paediatrics and family medicine.",
+    "specialties": ["Cardiology", "Pediatrics", "Family Medicine"],
+    "tagline": "Care that knows you — now in your pocket.",
+}
+DEMO_PEOPLE = [
+    {"email": "admin@darshifa.demo", "name": "Dr. Hessa Al Otaibi", "role": "doctor", "account_role": "account_admin",
+     "specialty": "Family Medicine", "label": "Hospital admin"},
+    {"email": "dr.faris@darshifa.demo", "name": "Dr. Faris Al Zahrani", "role": "doctor", "account_role": "member",
+     "specialty": "Cardiology", "label": "Doctor"},
+    {"email": "reem@darshifa.demo", "name": "Reem Al Harbi", "role": "patient", "account_role": "member",
+     "profile": "hypertensive", "label": "Patient"},
+    {"email": "sultan@darshifa.demo", "name": "Sultan Al Qahtani", "role": "patient", "account_role": "member",
+     "profile": "diabetic", "label": None},
+]
+DEMO_MEDS = {"hypertensive": [("Amlodipine", "5 mg", ["08:00"])],
+             "diabetic": [("Metformin", "500 mg", ["08:00", "20:00"])]}
+
+
+def _demo_vitals(user_id: str, kind: str) -> List[dict]:
+    rows, rng = [], random.Random(user_id)
+    for day in range(20, -1, -1):
+        drift = (20 - day) / 20
+        sys_ = rng.gauss(128 + 22 * drift, 4) if kind == "hypertensive" else rng.gauss(122, 5)
+        glucose = rng.gauss(150 + 30 * drift, 10) if kind == "diabetic" else rng.gauss(98, 6)
+        at = now_utc() - timedelta(days=day, hours=rng.randint(0, 5))
+        rows.append({"vital_id": f"vital_{uuid.uuid4().hex[:12]}", "user_id": user_id, "profile_id": user_id,
+                     "heart_rate": round(rng.gauss(76, 5)), "systolic": round(sys_), "diastolic": round(sys_ * 0.64),
+                     "glucose": round(glucose), "spo2": round(rng.gauss(97.5, 0.6), 1),
+                     "temperature": round(rng.gauss(36.8, 0.2), 1), "weight": None, "source": "demo_seed",
+                     "recorded_at": at.isoformat(), "created_at": at.isoformat()})
+    return rows
+
+
+async def seed_demo_hospital(reset: bool = False) -> dict:
+    """Idempotent sample tenant for the branded sign-in page. reset=True rebuilds its people and data."""
+    account = await db.accounts.find_one({"slug": DEMO_HOSPITAL_SLUG}, {"_id": 0})
+    if account and not reset:
+        return account
+    if not account:
+        account = {"account_id": await new_account_id(), "slug": DEMO_HOSPITAL_SLUG, "contact_email": None,
+                   "default_language": "en", "custom_domain": None, "domain_verified": False, "sample": True,
+                   "created_by": "seed", "created_at": iso()}
+    account.update({k: v for k, v in DEMO_HOSPITAL.items()}, features={"white_label": True}, listed_in_app=True,
+                   demo_logins=[{"label": p["label"], "email": p["email"], "password": DEMO_PASSWORD}
+                                for p in DEMO_PEOPLE if p["label"]])
+    await db.accounts.update_one({"account_id": account["account_id"]}, {"$set": account}, upsert=True)
+    acc_id = account["account_id"]
+    doctor_ids = []
+    for p in DEMO_PEOPLE:
+        existing = await db.users.find_one({"email": p["email"]}, {"_id": 0, "user_id": 1})
+        user_id = existing["user_id"] if existing else f"user_{uuid.uuid4().hex[:12]}"
+        await db.users.update_one({"email": p["email"]}, {"$set": {
+            "user_id": user_id, "email": p["email"], "name": p["name"], "role": p["role"],
+            "password_hash": hash_password(DEMO_PASSWORD), "account_id": acc_id, "account_role": p["account_role"],
+            "specialty": p.get("specialty"), "clinic": DEMO_HOSPITAL["branding"]["display_name"] if p["role"] == "doctor" else None,
+            "city": "Riyadh", "onboarding_completed": True, "sharing_enabled": p["role"] == "patient",
+            "assigned_doctor_user_id": None, "picture": None, "clinician_requested": False, "sample": True},
+            "$setOnInsert": {"created_at": iso()}}, upsert=True)
+        if p["role"] == "doctor":
+            doctor_ids.append(user_id)
+            await db.doctor_availability.update_one({"doctor_user_id": user_id}, {"$set": {
+                "doctor_user_id": user_id, "slot_minutes": 30, "tz_offset_minutes": 180, "blocked_dates": [],
+                "weekly": [{"weekday": d, "start": "09:00", "end": "14:00"} for d in (6, 0, 1, 2, 3)],
+                "updated_at": iso()}}, upsert=True)
+            continue
+        await db.users.update_one({"user_id": user_id}, {"$set": {"assigned_doctor_user_id": doctor_ids[-1]}})
+        await db.vitals.delete_many({"profile_id": user_id})
+        await db.vitals.insert_many(_demo_vitals(user_id, p["profile"]))
+        await db.medications.delete_many({"profile_id": user_id})
+        await db.medications.insert_many([{
+            "medication_id": f"med_{uuid.uuid4().hex[:12]}", "user_id": user_id, "profile_id": user_id, "name": n,
+            "dosage": d, "times": t, "instructions": "", "active": True, "created_at": iso()} for n, d, t in DEMO_MEDS[p["profile"]]])
+        await db.encounters.delete_many({"patient_user_id": user_id, "source": "demo_seed"})
+        enc_id = f"enc_{uuid.uuid4().hex[:12]}"
+        when = now_utc() - timedelta(days=9)
+        await db.encounters.insert_one({
+            "encounter_id": enc_id, "patient_user_id": user_id, "profile_id": user_id, "doctor_user_id": doctor_ids[-1],
+            "account_id": acc_id, "status": "completed", "scheduled_at": when.isoformat(), "ended_at": when.isoformat(),
+            "reason_for_visit": "Routine follow-up", "source": "demo_seed", "created_at": when.isoformat(),
+            "updated_at": when.isoformat()})
+        await db.hospital_ratings.update_one({"patient_user_id": user_id, "account_id": acc_id}, {"$set": {
+            "rating_id": f"rate_{uuid.uuid4().hex[:12]}", "encounter_id": enc_id, "account_id": acc_id,
+            "doctor_user_id": doctor_ids[-1], "doctor_name": DEMO_PEOPLE[1]["name"], "patient_user_id": user_id,
+            "patient_display": _public_name(p["name"]), "stars": 5 if p["profile"] == "hypertensive" else 4,
+            "comment": "Short wait and the doctor explained everything clearly." if p["profile"] == "hypertensive" else "",
+            "hidden": False, "created_at": iso(), "updated_at": iso()}}, upsert=True)
+    return account
+
+
+# ---------- Super admin: platform stats + staging hub ----------
+@api.get("/admin/platform-stats")
+async def platform_stats(admin=Depends(require_admin)):
+    now = now_utc()
+    windows = {"today": iso(now - timedelta(days=1)), "week": iso(now - timedelta(days=7)),
+               "month": iso(now - timedelta(days=30))}
+    suspended = [a["account_id"] for a in await db.accounts.find({"status": "suspended"}, {"_id": 0, "account_id": 1}).to_list(1000)]
+    roles = {}
+    for role in ("patient", "doctor", "pharmacist"):
+        q = {"role": role, "email": {"$ne": ADMIN_EMAIL}}
+        row = {"total": await db.users.count_documents(q),
+               "in_good_standing": await db.users.count_documents({**q, "account_id": {"$nin": suspended}})}
+        for key, since in windows.items():
+            row[f"active_{key}"] = await db.users.count_documents(
+                {**q, "$or": [{"last_seen_at": {"$gte": since}}, {"last_login_at": {"$gte": since}}]})
+        roles[role] = row
+    totals = {k: sum(r[k] for r in roles.values()) for k in next(iter(roles.values()))}
+    daily = await db.user_activity_days.aggregate([
+        {"$match": {"day": {"$gte": (now - timedelta(days=29)).strftime("%Y-%m-%d")}}},
+        {"$group": {"_id": "$day", "n": {"$sum": 1}}}, {"$sort": {"_id": 1}}]).to_list(40)
+    by_day = {d["_id"]: d["n"] for d in daily}
+    series = [{"day": (now - timedelta(days=i)).strftime("%Y-%m-%d"),
+               "active": by_day.get((now - timedelta(days=i)).strftime("%Y-%m-%d"), 0)} for i in range(29, -1, -1)]
+    statuses = {s["_id"]: s["n"] for s in await db.accounts.aggregate([
+        {"$group": {"_id": "$status", "n": {"$sum": 1}}}]).to_list(10)}
+    return {"roles": roles, "totals": totals, "daily_active": series,
+            "accounts": {"total": sum(statuses.values()), "by_status": statuses,
+                         "not_suspended": sum(n for s, n in statuses.items() if s != "suspended")},
+            "pharmacies": await db.pharmacies.count_documents({"active": True}), "generated_at": iso()}
+
+
+@api.get("/admin/staging")
+async def staging_hub(admin=Depends(require_admin)):
+    accounts = await db.accounts.find({"status": {"$ne": "suspended"}}, ACCOUNT_PROJECTION).sort("name", 1).to_list(500)
+    white_label = []
+    for a in accounts:
+        if (await effective_flags(a))["white_label"] or (a.get("features") or {}).get("white_label"):
+            white_label.append({"account_id": a["account_id"], "name": (a.get("branding") or {}).get("display_name") or a["name"],
+                                "slug": a.get("slug"), "custom_domain": a.get("custom_domain"),
+                                "demo_logins": a.get("demo_logins") or []})
+    return {"env": APP_ENV, "is_staging": IS_STAGING, "white_label_accounts": white_label,
+            "test_logins": [
+                {"label": "Super admin", "email": ADMIN_EMAIL, "where": "/auth/clinician"},
+                {"label": "Doctor (Al Noor admin)", "email": "dr.layla@sihha.ai", "where": "/auth/clinician"},
+                {"label": "Patient", "email": "omar.patient@sihha.ai", "where": "/auth"},
+                {"label": "Standalone patient", "email": "solo.patient@sihha.ai", "where": "/auth"},
+                {"label": "Pharmacist", "email": "pharmacist@aldawaa.sihha.ai", "where": "/auth/pharmacy"},
+            ] if IS_STAGING else []}
+
+
+@api.post("/admin/staging/reset-demo")
+async def reset_demo_hospital(admin=Depends(require_admin)):
+    require_staging()
+    account = await seed_demo_hospital(reset=True)
+    return {"ok": True, "account_id": account["account_id"], "slug": account["slug"]}
+
+
+# ---------- Health chat photos ----------
+CHAT_PHOTO_MAX = 10 * 1024 * 1024
+CHAT_PHOTO_TTL = 900
+_TEMP_CHAT_PHOTOS: dict = {}
+
+
+def _normalise_photo(raw: bytes) -> bytes:
+    try:
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
+        img.thumbnail((1600, 1600))
+        out = io.BytesIO()
+        img.convert("RGB").save(out, format="JPEG", quality=85)
+        return out.getvalue()
+    except Exception:
+        raise HTTPException(status_code=422, detail="Use a JPG, PNG or WEBP photo")
+
+
+@api.post("/chat/sessions/{sid}/photos")
+async def upload_chat_photo(sid: str, file: UploadFile = File(...), keep: bool = Form(True),
+                            user=Depends(require_not_pharmacist)):
+    session = await db.chat_sessions.find_one({"chat_session_id": sid, "user_id": user["user_id"]}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    raw = await file.read(CHAT_PHOTO_MAX + 1)
+    if len(raw) > CHAT_PHOTO_MAX:
+        raise HTTPException(status_code=413, detail="Photos must be under 10 MB")
+    jpeg = await asyncio.to_thread(_normalise_photo, raw)
+    photo_id = f"photo_{uuid.uuid4().hex[:12]}"
+    now = time.time()
+    for key in [k for k, v in _TEMP_CHAT_PHOTOS.items() if v["expires"] < now]:
+        _TEMP_CHAT_PHOTOS.pop(key, None)
+    if keep:
+        path = f"{STORAGE_APP}/chat/{user['user_id']}/{photo_id}.jpg"
+        await asyncio.to_thread(put_object, path, jpeg, "image/jpeg")
+        await db.chat_photos.insert_one({"photo_id": photo_id, "chat_session_id": sid, "user_id": user["user_id"],
+                                         "profile_id": session["profile_id"], "path": path, "created_at": iso()})
+    else:
+        _TEMP_CHAT_PHOTOS[photo_id] = {"data": jpeg, "sid": sid, "user_id": user["user_id"], "expires": now + CHAT_PHOTO_TTL}
+    return {"photo_id": photo_id, "kept": keep, "url": f"/api/chat/photos/{photo_id}" if keep else None}
+
+
+async def _take_chat_photo(photo_id: str, sid: str, user: dict) -> tuple[bytes, bool]:
+    temp = _TEMP_CHAT_PHOTOS.pop(photo_id, None)
+    if temp and temp["sid"] == sid and temp["user_id"] == user["user_id"]:
+        return temp["data"], False
+    doc = await db.chat_photos.find_one({"photo_id": photo_id, "chat_session_id": sid, "user_id": user["user_id"]}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="That photo has expired — attach it again")
+    data, _ = await asyncio.to_thread(get_object, doc["path"])
+    return data, True
+
+
+@api.get("/chat/photos/{photo_id}")
+async def get_chat_photo(photo_id: str, user=Depends(get_current_user)):
+    doc = await db.chat_photos.find_one({"photo_id": photo_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    if doc["user_id"] != user["user_id"]:
+        if user.get("role") != "doctor":
+            raise HTTPException(status_code=404, detail="Photo not found")
+        await assert_doctor_can_access_patient(db, user, doc["user_id"])
+    data, _ = await asyncio.to_thread(get_object, doc["path"])
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
 
 
 app.include_router(api)

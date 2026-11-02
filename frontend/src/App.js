@@ -45,6 +45,9 @@ import PortalOrders from "./pages/pharmacy-portal/PortalOrders";
 import PortalSponsorship from "./pages/pharmacy-portal/PortalSponsorship";
 import PortalProducts from "./pages/pharmacy-portal/PortalProducts";
 import AdminPharmacies from "./pages/admin/Pharmacies";
+import AdminOverview from "./pages/admin/Overview";
+import AdminStaging from "./pages/admin/Staging";
+import HospitalSignIn from "./pages/HospitalSignIn";
 
 export default function App() {
   return (
@@ -79,6 +82,7 @@ function AppRouter() {
           <Route path="/auth" element={<Auth />} />
           <Route path="/auth/clinician" element={<Auth portal="doctor" />} />
           <Route path="/auth/pharmacy" element={<PharmacyAuth />} />
+          <Route path="/h/:slug" element={<HospitalSignIn />} />
           <Route element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
             <Route path="/pharmacy-portal" element={<PortalOrders />} />
             <Route path="/pharmacy-portal/sponsorship" element={<PortalSponsorship />} />
@@ -108,7 +112,9 @@ function AppRouter() {
             <Route path="/my-hospital" element={<MyHospital />} />
           </Route>
           <Route element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
-            <Route path="/admin" element={<Navigate to="/admin/accounts" replace />} />
+            <Route path="/admin" element={<Navigate to="/admin/overview" replace />} />
+            <Route path="/admin/overview" element={<AdminOverview />} />
+            <Route path="/admin/staging" element={<AdminStaging />} />
             <Route path="/admin/accounts" element={<Accounts />} />
             <Route path="/admin/accounts/:accountId" element={<AccountWorkspace />} />
             <Route path="/admin/flags" element={<FeatureFlags />} />

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { api } from "../lib/api";
+import { api, API } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { Stethoscope, Bell, FileText, Pill, ChevronLeft } from "lucide-react";
@@ -117,6 +117,15 @@ export default function DoctorPortal() {
                   Report — {new Date(r.generated_at).toLocaleString()}
                 </summary>
                 <pre className="mt-3 text-xs whitespace-pre-wrap font-body text-ink-soft leading-relaxed">{r.content}</pre>
+                {r.photo_ids?.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2" data-testid={`report-photos-${r.report_id}`}>
+                    {r.photo_ids.map((pid) => (
+                      <a key={pid} href={`${API}/chat/photos/${pid}`} target="_blank" rel="noreferrer">
+                        <img src={`${API}/chat/photos/${pid}`} alt="Patient photo" className="h-24 w-24 rounded-lg object-cover border border-line" />
+                      </a>
+                    ))}
+                  </div>
+                )}
               </details>
             ))}
           </div>

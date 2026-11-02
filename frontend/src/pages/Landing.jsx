@@ -10,6 +10,7 @@ import { DemoForm } from "../components/landing/DemoForm";
 import { AudienceTabs } from "../components/landing/AudienceTabs";
 import { ScribeProof } from "../components/landing/ScribeProof";
 import { WhiteLabelPreview } from "../components/landing/WhiteLabelPreview";
+import { WhiteLabelCallout } from "../components/landing/WhiteLabelCallout";
 import { LanguageToggle } from "../components/LanguageToggle";
 
 const DOCTOR_IMG = "https://images.unsplash.com/photo-1758691463000-08b98131daf3?crop=entropy&cs=srgb&fm=jpg&q=80&w=1400";
@@ -142,9 +143,9 @@ export default function Landing() {
       <section id="hospitals" className="bg-white border-y border-line">
         <div className="max-w-7xl mx-auto px-6 py-24 grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
           <div className="lg:col-span-5">
-            <p className="text-xs uppercase tracking-[0.2em] text-forest font-semibold">White-label, plug and play</p>
-            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mt-3">Their brand. Our intelligence.</h2>
-            <p className="text-ink-soft mt-5 leading-relaxed">Hospitals launch Sihha under their own name, colours and web address — with only the modules they want — and manage every doctor and patient from one console.</p>
+            <p className="text-xs uppercase tracking-[0.2em] text-forest font-semibold">Sihha AI is available as a white-label solution</p>
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mt-3">Your brand. Our intelligence.</h2>
+            <p className="text-ink-soft mt-5 leading-relaxed">Hospitals and clinics can launch Sihha AI under their own name, logo, colours and web address — with only the modules they want — and manage every doctor and patient from one console.</p>
             <ol className="mt-10 space-y-6" data-testid="hospital-steps">
               {steps.map(({ icon: Icon, title, desc }, i) => (
                 <li key={title} className="flex gap-4">
@@ -157,6 +158,8 @@ export default function Landing() {
           <div className="lg:col-span-7"><WhiteLabelPreview /></div>
         </div>
       </section>
+
+      <WhiteLabelCallout />
 
       <section id="safety" className="max-w-7xl mx-auto px-6 py-24 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
         <div>

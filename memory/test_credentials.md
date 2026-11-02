@@ -55,6 +55,14 @@ All accounts use standard email/password JWT auth (httpOnly cookies).
 ## Cron (added Jun 2026)
 - Cron endpoints POST /api/cron/monthly-reports and /api/cron/audio-purge need `Authorization: Bearer $WEBHOOK_CRON_SECRET` (backend/.env).
 
+## White-label demo hospital (staging, seeded on startup, reset at /admin/staging)
+- Branded sign-in page: `/h/dar-al-shifa` (Dar Al Shifa Medical Center) — password for all: `Demo@123`
+  - Hospital admin (doctor + account_admin): `admin@darshifa.demo`
+  - Doctor: `dr.faris@darshifa.demo`
+  - Patient: `reem@darshifa.demo` (rising BP trend); `sultan@darshifa.demo` (diabetic)
+- Al Noor branded sign-in: `/h/al-noor` (use dr.layla / omar).
+- Super admin console: `/auth/clinician` → admin@sihha.ai / Admin@123 → `/admin/overview` (active users), `/admin/staging`.
+
 ## Hospital finder + pharmacy portal (added Jun 2026, seed: backend/seed_marketplace_portal.py, idempotent)
 - Standalone patient (no hospital, no doctor): `solo.patient@sihha.ai` / `Patient@123` → /find-care, Settings "My hospital".
 - Listed hospitals (listed_in_app=true): Al Noor Specialist Hospital (dr.layla etc.) and Jeddah Family Clinics (dr.khalid).

@@ -8,14 +8,14 @@ const API_ORIGIN = process.env.REACT_APP_BACKEND_URL;
 
 export function BrandingTab({ account, onSaved }) {
   const b = account.branding || {};
-  const [form, setForm] = useState({ display_name: b.display_name || account.name, primary_color: b.primary_color || "#1E3F2A", accent_color: b.accent_color || "#B1D8B7" });
+  const [form, setForm] = useState({ display_name: b.display_name || account.name, primary_color: b.primary_color || "#1E3F2A", accent_color: b.accent_color || "#B1D8B7", slug: account.slug || "", tagline: account.tagline || "" });
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
   const save = async () => {
     setSaving(true);
     try {
-      onSaved((await api.patch(`/admin/accounts/${account.account_id}/branding`, form)).data);
+      onSaved((await api.patch(`/admin/accounts/${account.account_id}/branding`, { ...form, slug: form.slug.trim().toLowerCase() || undefined })).data);
       toast.success("Branding saved");
     } catch (e) {
       toast.error(errorText(e));
@@ -48,6 +48,12 @@ export function BrandingTab({ account, onSaved }) {
       <div className="card p-6 space-y-5">
         <div><label className={labelCls}>Name patients see</label>
           <input value={form.display_name} onChange={(e) => setForm({ ...form, display_name: e.target.value })} data-testid="branding-name-input" className={inputCls} /></div>
+        <div><label className={labelCls}>Sign-in page address</label>
+          <div className="flex items-center gap-2"><span className="text-sm text-ink-soft font-mono" dir="ltr">/h/</span>
+            <input value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder="al-noor" dir="ltr" data-testid="branding-slug-input" className={`${inputCls} font-mono`} /></div>
+          {account.slug && <a href={`/h/${account.slug}`} target="_blank" rel="noreferrer" className="text-xs text-forest underline mt-1 inline-block" data-testid="branding-slug-open">Open the branded sign-in page</a>}</div>
+        <div><label className={labelCls}>Sign-in page headline</label>
+          <input value={form.tagline} maxLength={120} onChange={(e) => setForm({ ...form, tagline: e.target.value })} placeholder="Your health, with your hospital." data-testid="branding-tagline-input" className={inputCls} /></div>
         <div className="grid grid-cols-2 gap-4">
           {[["primary_color", "Main colour"], ["accent_color", "Accent colour"]].map(([k, label]) => (
             <div key={k}><label className={labelCls}>{label}</label>

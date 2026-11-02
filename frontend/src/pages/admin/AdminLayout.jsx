@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, Navigate, Outlet, useNavigate } from "react-router-dom";
-import { Building2, ToggleRight, UserCheck, Search, ArrowLeft, LogOut, ShieldCheck, Inbox, Store } from "lucide-react";
+import { Building2, ToggleRight, UserCheck, Search, ArrowLeft, LogOut, ShieldCheck, Inbox, Store, LayoutDashboard, FlaskConical } from "lucide-react";
 import { LanguageToggle } from "../../components/LanguageToggle";
 import { useAuth } from "../../context/AuthContext";
 import { usePlatform } from "../../context/PlatformContext";
@@ -8,11 +8,13 @@ import { AccountSwitcher } from "../../components/admin/AccountSwitcher";
 import { QuickNav } from "../../components/admin/QuickNav";
 
 const nav = [
+  { to: "/admin/overview", label: "Overview", icon: LayoutDashboard, testid: "admin-nav-overview" },
   { to: "/admin/accounts", label: "Accounts", icon: Building2, testid: "admin-nav-accounts" },
   { to: "/admin/flags", label: "Feature switches", icon: ToggleRight, testid: "admin-nav-flags" },
   { to: "/admin/demo-requests", label: "Demo requests", icon: Inbox, testid: "admin-nav-demo-requests" },
   { to: "/admin/assignments", label: "Doctor assignments", icon: UserCheck, testid: "admin-nav-assignments" },
   { to: "/admin/pharmacies", label: "Pharmacies", icon: Store, testid: "admin-nav-pharmacies" },
+  { to: "/admin/staging", label: "Staging", icon: FlaskConical, testid: "admin-nav-staging" },
 ];
 
 export default function AdminLayout() {

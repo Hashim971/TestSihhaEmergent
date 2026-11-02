@@ -7,6 +7,7 @@ import { jsPDF } from "jspdf";
 import { Send, FileText, Plus, MessageSquare } from "lucide-react";
 import { ShareScreeningCard } from "../components/ShareScreeningCard";
 import { TriageCard } from "../components/TriageCard";
+import { ChatPhotoPicker, ChatPhotoPreview } from "../components/ChatPhoto";
 
 export default function HealthChat() {
   const { activeProfile } = useAuth();
@@ -14,6 +15,7 @@ export default function HealthChat() {
   const [sessionId, setSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
+  const [photo, setPhoto] = useState(null);
   const [streaming, setStreaming] = useState(false);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [lastReport, setLastReport] = useState(null);
@@ -56,7 +58,7 @@ export default function HealthChat() {
   };
 
   const send = async () => {
-    if (!input.trim() || streaming) return;
+    if ((!input.trim() && !photo) || streaming) return;
     let sid = sessionId;
     if (!sid) {
       const res = await api.post("/chat/sessions", { profile_id: activeProfile.id });
@@ -67,16 +69,26 @@ export default function HealthChat() {
       loadSessions();
     }
     const text = input;
+    const attached = photo;
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: text }, { role: "assistant", content: "", streaming: true }]);
+    setPhoto(null);
+    setMessages((prev) => [...prev, { role: "user", content: text, localPhoto: attached?.previewUrl, photoKept: attached?.keep }, { role: "assistant", content: "", streaming: true }]);
     setStreaming(true);
     try {
+      let photoId = null;
+      if (attached) {
+        const form = new FormData();
+        form.append("file", attached.file);
+        form.append("keep", attached.keep ? "true" : "false");
+        photoId = (await api.post(`/chat/sessions/${sid}/photos`, form, { headers: { "Content-Type": "multipart/form-data" } })).data.photo_id;
+      }
       const resp = await fetch(`${API}/chat/sessions/${sid}/message`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, photo_id: photoId }),
       });
+      if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || "Failed to send message");
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -107,7 +119,8 @@ export default function HealthChat() {
         return copy;
       });
     } catch (e) {
-      toast.error("Failed to send message");
+      setMessages((prev) => prev.filter((m) => !(m.streaming && m.content === "")));
+      toast.error(e?.response?.data?.detail || e?.message || "Failed to send message");
     } finally {
       setStreaming(false);
     }
@@ -209,6 +222,13 @@ export default function HealthChat() {
               <div className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
                 m.role === "user" ? "bg-forest text-white rounded-br-md" : "bg-sand border border-line rounded-bl-md"
               }`}>
+                {(m.localPhoto || m.photo_id) && (
+                  <img src={m.localPhoto || `${API}/chat/photos/${m.photo_id}`} alt="Shared with the assistant" data-testid={`chat-photo-${i}`}
+                    className="mb-2 max-h-56 rounded-xl object-cover" />
+                )}
+                {(m.photo_discarded || (m.localPhoto && m.photoKept === false)) && (
+                  <p className="text-[11px] opacity-80 mb-1" data-testid={`chat-photo-discarded-${i}`}>Photo shared once — not saved</p>
+                )}
                 {m.content}
                 {m.streaming && m.content === "" && (
                   <span className="flex gap-1 py-1">
@@ -221,17 +241,19 @@ export default function HealthChat() {
           <div ref={endRef} />
         </div>
 
+        <ChatPhotoPreview photo={photo} setPhoto={setPhoto} />
         <div className="border-t border-line p-4 flex gap-2">
+          <ChatPhotoPicker photo={photo} setPhoto={setPhoto} disabled={streaming} />
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder="Describe your symptoms…"
+            placeholder={photo ? "Add a note about the photo (optional)" : "Describe your symptoms…"}
             disabled={streaming}
             data-testid="chat-input"
-            className="flex-1 border border-line rounded-full px-5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest"
+            className="flex-1 min-w-0 border border-line rounded-full px-5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest"
           />
-          <button onClick={send} disabled={streaming || !input.trim()} data-testid="chat-send-btn" className="btn-primary !px-4">
+          <button onClick={send} disabled={streaming || (!input.trim() && !photo)} data-testid="chat-send-btn" className="btn-primary !px-4">
             <Send className="h-4 w-4" />
           </button>
         </div>
