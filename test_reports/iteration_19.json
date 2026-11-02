@@ -1,0 +1,55 @@
+{
+  "summary": "Iteration 19: tested standalone patient + hospital finder, booking share-consent, hospital switching, App listing (super admin + account_admin), doctor week view, pharmacy portal (sign-in separation, self sign-up -> pending -> approve/reject, admin invite/remove staff, order transitions, messaging, isolation), sponsorship console with mocked billing (request/409/cancel/mark-paid/decline, ranking), Arabic RTL + 390px mobile for find-care and portal, plus one live screening-report check (prompt_version report-v1/chat-v1, has 'SCREENING SUMMARY' -> PASS). Backend 18/19 pytest pass. The core flows work end to end. Main problems: (1) the share-consent dialog is positioned wrong because a transformed parent breaks its fixed positioning (on mobile it opens off-screen); (2) the screening CTA 'Find a hospital & book' leads to an empty 'No hospital matches' page; (3) PUT /api/profile/doctor ignores the one-active-hospital rule; (4) pharmacist accounts can use patient endpoints such as booking.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "PUT /api/profile/doctor", "issue": "Ignores the one-active-hospital rule. Reproduced: solo patient linked to Jeddah (ACC-2BC6ED) picks Dr. Layla (Al Noor) -> 200. Hospital stays Jeddah and Layla can open the record (GET /api/doctor/patients/{id}/summary -> 200). The Settings 'My Doctor' list also shows doctors from every hospital, so a standalone patient can skip the hospital-first flow. Fix: when the doctor has an account_id, call _set_active_hospital(user, doctor.account_id), or reject doctors outside the active hospital, and filter the Settings list by account.", "priority": "HIGH"},
+      {"endpoint": "POST /api/booking (and other patient endpoints)", "issue": "A pharmacist account can book a patient visit (200; only role=='doctor' is blocked). Pharmacists can also reach /chat, /pharmacy/checkout and /profile/doctor, because only the frontend enforces the separate sign-in pages. Fix: in book_visit, require role == 'patient' (or reject 'pharmacist'), and add a require_patient dependency on patient-only routes.", "priority": "MEDIUM"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/admin/pharmacies/{id}/staff", "issue": "If the email belongs to a pending self-signup pharmacist (pharmacy_id None), that user is silently linked to the pharmacy. Their application stays 'pending', and approving it later creates a second pharmacy and moves the user."},
+      {"endpoint": "GET /api/pharmacy/orders", "issue": "Patient order list has no unread_messages count, so the patient side shows no unread badge (pharmacy side does). Neither thread polls for new messages."},
+      {"endpoint": "GET /api/pharmacy/pharmacies", "issue": "stats.impressions goes up on every call from any role (admin/pharmacist/refresh), which inflates the sponsorship 'Times shown' figure."},
+      {"endpoint": "POST /api/admin/pharmacy-applications/{id}/approve", "issue": "The new pharmacy has name_ar = English name and an empty catalog, yet it is listed in the marketplace right away (and can be ranked Gold) with nothing to sell."},
+      {"endpoint": "GET /api/pharmacy/orders/{id}/messages (other patient)", "issue": "Returns 403 rather than 404. It is still denied, so this is fine; noted only for consistency with the spec."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ShareConsentDialog (BookVisit)", "issue": "The overlay uses 'fixed inset-0' but sits inside '.space-y-6.fade-up' (fadeUp animation keeps transform: matrix(1,0,0,1,0,0)), so it is positioned against that container instead of the viewport. On desktop the backdrop covers only the main column, and the sidebar and header are not dimmed. On mobile (390x844) the overlay is 1778px tall and the dialog sits off-screen (share-record-yes at y=858), so the user must scroll to find it. Fix: render it with ReactDOM.createPortal(document.body), or end fadeUp with transform: none / fill-mode backwards. Other modals inside .fade-up likely have the same problem.", "selector": "[data-testid='share-consent-dialog']", "priority": "HIGH"},
+      {"component": "OrderThread", "issue": "The same message appeared twice after sending right after opening the thread (DB had 1 row). Race: the GET on open resolves after the POST, then the POST result is appended. Fix: dedupe by message_id when appending or merging.", "selector": "[data-testid^='portal-thread-']", "priority": "LOW"},
+      {"component": "WeekView", "issue": "No loading state. Until /doctor/availability returns, the grid shows only the visit hours (e.g. 09-10) with no shading, then jumps to 08-13. Shading (bg-sage/15) is very faint.", "selector": "[data-testid='week-view']", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Screening report -> Find a hospital & book", "issue": "TriageCard passes specialty=recommended_specialty (e.g. 'General practice') into /find-care. FindCare pre-fills it and filters by substring, so the patient lands on 'No hospital matches that search' (Jeddah lists 'Family Medicine', Al Noor 'Internal Medicine'). This dead-ends the main post-screening flow. Fix: do not filter hospitals by the report specialty (keep it as a hint for /book), map synonyms (general practice/primary care -> family medicine), or fall back to all hospitals when nothing matches.", "affected_selectors": ["[data-testid='triage-book-btn']", "[data-testid='find-care-empty']", "[data-testid='find-care-specialty-input']"]}
+    ],
+    "design_issues": [
+      {"screen": "Admin /admin/pharmacies", "issues": ["Uses native window.prompt for the reject reason and payment reference, and window.confirm for removing staff. Use a shadcn Dialog.", "Nahdi badge reads 'Gold Until —' when active_until is null; show 'Gold · no end date'."]},
+      {"screen": "Settings MyHospitalCard", "issues": ["leave-hospital-btn uses native window.confirm."]},
+      {"screen": "Arabic", "issues": ["ShareConsentDialog question and choice descriptions (interpolated strings) stay in English in AR mode.", "Sponsorship page subtitle 'Sponsored pharmacies appear first...' and the tier labels BRONZE/SILVER/GOLD are not translated."]},
+      {"screen": "Pharmacy portal pending/rejected", "issues": ["Status card is flush against the header (about 5px top gap); add top margin."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter19_findcare_pharmacy_portal.py", "/app/backend/tests/iter19_report_probe.py", "/app/backend/tests/iter19_doctor_choice_probe.py", "/app/backend/tests/iter19_ui_seed.py", "/app/backend/tests/cleanup_iter19.py", "/app/test_reports/pytest/iter19.xml"],
+  "action_items": [
+    "Make ShareConsentDialog (and other modals inside .fade-up) render via a portal, or remove the lingering transform from fadeUp, so the dialog is centered in the viewport on mobile.",
+    "Fix the post-screening CTA dead end: don't strictly filter /find-care hospitals by the LLM's recommended_specialty (or map synonyms / fall back to all).",
+    "Enforce one active hospital in PUT /api/profile/doctor (switch the hospital to the doctor's account or reject), and filter Settings 'My Doctor' by the active hospital.",
+    "Block pharmacist (and other non-patient) roles from patient endpoints on the backend: POST /api/booking, chat, checkout, profile/doctor.",
+    "Dedupe OrderThread messages by message_id; add an unread count to the patient /pharmacy/orders list.",
+    "Replace window.prompt/confirm in admin Pharmacies and MyHospitalCard with shadcn dialogs; translate the remaining AR strings."
+  ],
+  "critical_code_review_comments": [
+    "backend/server.py is about 4,920 lines. Split it into routers: care.py (hospital finder/booking), pharmacy_portal.py, sponsorship.py, admin_pharmacies.py.",
+    "The patient vs pharmacy sign-in split is enforced only in the frontend (Auth.jsx / PharmacyAuth.jsx check data.role after a successful login). POST /api/auth/login accepts any role, so a session cookie is issued anyway.",
+    "invite_pharmacy_staff can link a pending applicant to a pharmacy without resolving their pharmacy_applications row.",
+    "list_pharmacies increments impressions on every request, including for non-patient roles.",
+    "_set_active_hospital revokes care_grants for doctors of other hospitals, but encounters already booked with them stay visible on their schedules. This is probably intended; confirm the product decision."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter19_findcare_pharmacy_portal.py", "/app/backend/tests/iter19_report_probe.py", "/app/backend/tests/iter19_doctor_choice_probe.py", "/app/backend/tests/iter19_ui_seed.py", "/app/backend/tests/cleanup_iter19.py"],
+  "success_rate": {"backend": "95% (18/19 pytest; the failure is pharmacist allowed to book)", "frontend": "about 85% (all listed flows work; the consent-dialog positioning and CTA dead end are significant)"},
+  "seed_data_creation": "None kept. Created TEST_ pharmacies/applications/staff, orders, encounters, a screening report for solo.patient and sponsorship requests, then removed them all with tests/cleanup_iter19.py. solo.patient restored to standalone (account_id null, no doctor). omar.patient unchanged (Al Noor, Dr. Layla). Eastern Health listed_in_app restored to false; Al Noor 'about' restored.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "IDs: Al Noor ACC-12AFFE, Jeddah ACC-2BC6ED, Eastern ACC-A84A0F (unlisted); Khalid user_af7cc0803ba9, Layla user_b1000ae5aad6; solo user_155300cdf623; Al Dawaa pharm_744d6031f418 (in_app); Nahdi pharm_8a96b2710089 (gold, no expiry); OTC item at Al Dawaa item_7b3c5dd64c3b (OTC-only in-app orders start as 'confirmed'). The pytest file cleans up after itself; run cleanup_iter19.py after UI runs. The preview clock is around 2026-11-02. Editing files under backend/tests triggers a backend hot-reload (brief 502). Retest: consent dialog on 390px, the triage CTA leading to hospitals, PUT /profile/doctor cross-hospital, pharmacist POST /booking -> 403.",
+  "rca of the issue": "Consent dialog: CSS 'fixed' positioning is relative to the nearest ancestor with a transform. The page wrapper '.fade-up' keeps transform: matrix(1,0,0,1,0,0) after the animation, so the overlay is sized to the page content (1778px on mobile) and the centered card lands below the fold. CTA dead end: FindCare reads specialty from the query and the backend does a substring match against hospital specialties; LLM output such as 'General practice' doesn't match 'Family Medicine'. Cross-hospital doctor: choose_my_doctor writes assigned_doctor_user_id directly and never calls _set_active_hospital."
+}

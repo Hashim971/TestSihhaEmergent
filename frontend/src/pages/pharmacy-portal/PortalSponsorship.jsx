@@ -29,7 +29,7 @@ export default function PortalSponsorship() {
     <div className="space-y-8 fade-up" data-testid="portal-sponsorship-page">
       <div>
         <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3"><Megaphone className="h-7 w-7 text-forest" /> Sponsored placement</h1>
-        <p className="text-ink-soft mt-1">Sponsored pharmacies appear first in the marketplace for {data.tiers[0].days} days per purchase.</p>
+        <p className="text-ink-soft mt-1">Sponsored pharmacies appear first in the marketplace. Each purchase lasts 30 days.</p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

@@ -23,6 +23,7 @@ export function WeekView({ encounters, onOpen }) {
     .filter((e) => e.local >= monday && e.local < new Date(monday.getTime() + 7 * DAY));
 
   const blocks = availability?.weekly || [];
+  if (!availability) return <div className="card p-6 text-sm text-ink-soft" data-testid="week-view-loading">Loading your week…</div>;
   const blocked = new Set(availability?.blocked_dates || []);
   const hoursUsed = [...blocks.flatMap((b) => [parseInt(b.start, 10), parseInt(b.end, 10)]), ...visits.map((v) => v.local.getUTCHours())];
   const startH = hoursUsed.length ? Math.max(0, Math.min(...hoursUsed) - 1) : 8;
@@ -39,7 +40,7 @@ export function WeekView({ encounters, onOpen }) {
         <button onClick={() => setWeekOffset(weekOffset + 1)} className="p-2 rounded-full border border-line hover:bg-sand" data-testid="week-next-btn"><ChevronRight className="h-4 w-4 rtl:rotate-180" /></button>
         <p className="font-semibold ms-2" data-testid="week-range-label">{label}</p>
         <p className="ms-auto text-xs text-ink-soft flex items-center gap-3">
-          <span className="inline-flex items-center gap-1"><span className="h-3 w-3 rounded bg-sage/25 border border-sage/50" /> Open hours</span>
+          <span className="inline-flex items-center gap-1"><span className="h-3 w-3 rounded bg-sage/30 border border-sage/60" /> Open hours</span>
           <span data-testid="week-visit-count">{visits.length} visits</span>
         </p>
       </div>
@@ -62,7 +63,7 @@ export function WeekView({ encounters, onOpen }) {
                 const open = !blocked.has(d.toISOString().slice(0, 10)) && isOpen(i, h);
                 const cell = visits.filter((v) => v.local.getUTCDay() === d.getUTCDay() && v.local.getUTCHours() === h);
                 return (
-                  <div key={i} className={`border-t border-s border-line min-h-[52px] p-1 space-y-1 ${open ? "bg-sage/15" : ""}`} data-testid={`week-cell-${i}-${h}`}>
+                  <div key={i} className={`border-t border-s border-line min-h-[52px] p-1 space-y-1 ${open ? "bg-sage/30" : ""}`} data-testid={`week-cell-${i}-${h}`}>
                     {cell.map((v) => (
                       <button key={v.encounter_id} onClick={() => onOpen(v.encounter_id)} data-testid={`week-visit-${v.encounter_id}`}
                         className={`w-full text-start rounded-md px-2 py-1 text-[11px] leading-tight border ${v.status === "completed" ? "bg-white border-line text-ink-soft" : "bg-forest text-white border-forest"} hover:opacity-90`}

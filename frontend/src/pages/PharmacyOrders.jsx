@@ -119,7 +119,7 @@ export default function PharmacyOrders() {
               </button>
             )}
           </div>
-          {order.pharmacy_id && <OrderThread base={`/pharmacy/orders/${order.order_id}`} me="patient" testid={`order-thread-${order.order_id}`} />}
+          {order.pharmacy_id && <OrderThread base={`/pharmacy/orders/${order.order_id}`} me="patient" unread={order.unread_messages} testid={`order-thread-${order.order_id}`} />}
         </div>
       ))}
     </div>

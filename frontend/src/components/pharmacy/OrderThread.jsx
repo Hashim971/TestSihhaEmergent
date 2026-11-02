@@ -10,7 +10,10 @@ export function OrderThread({ base, me, testid, unread = 0 }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (open) api.get(`${base}/messages`).then(({ data }) => setMessages(data)).catch(() => {});
+    if (open) api.get(`${base}/messages`).then(({ data }) => setMessages((m) => {
+      const ids = new Set(data.map((x) => x.message_id));
+      return [...data, ...m.filter((x) => !ids.has(x.message_id))];
+    })).catch(() => {});
   }, [open, base]);
 
   const send = async (e) => {
@@ -19,7 +22,7 @@ export function OrderThread({ base, me, testid, unread = 0 }) {
     setBusy(true);
     try {
       const { data } = await api.post(`${base}/messages`, { text });
-      setMessages((m) => [...m, data]);
+      setMessages((m) => (m.some((x) => x.message_id === data.message_id) ? m : [...m, data]));
       setText("");
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Message not sent");

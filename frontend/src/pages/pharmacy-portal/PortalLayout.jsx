@@ -47,7 +47,7 @@ function PendingState({ me }) {
   const rejected = me.status === "rejected";
   const Icon = rejected ? XCircle : Clock;
   return (
-    <div className="card p-10 max-w-lg mx-auto text-center fade-up" data-testid={rejected ? "portal-application-rejected" : "portal-application-pending"}>
+    <div className="card p-10 max-w-lg mx-auto mt-8 text-center fade-up" data-testid={rejected ? "portal-application-rejected" : "portal-application-pending"}>
       <Icon className={`h-10 w-10 mx-auto mb-3 ${rejected ? "text-terracotta" : "text-forest"}`} />
       <h1 className="text-2xl font-bold tracking-tight">{rejected ? "Application not approved" : "Waiting for approval"}</h1>
       <p className="text-sm text-ink-soft mt-2">

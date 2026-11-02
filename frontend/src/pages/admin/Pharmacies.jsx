@@ -3,11 +3,13 @@ import { toast } from "sonner";
 import { Store, UserPlus, Check, X, Megaphone, Trash2 } from "lucide-react";
 import { api } from "../../lib/api";
 import { StatusBadge, errorText } from "../../components/admin/ui";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 
 export default function AdminPharmacies() {
   const [apps, setApps] = useState([]);
   const [pharmacies, setPharmacies] = useState([]);
   const [requests, setRequests] = useState([]);
+  const [dialog, setDialog] = useState(null);
 
   const load = useCallback(() => Promise.all([
     api.get("/admin/pharmacy-applications").then(({ data }) => setApps(data)),
@@ -22,6 +24,7 @@ export default function AdminPharmacies() {
 
   return (
     <div className="space-y-8 fade-up" data-testid="admin-pharmacies-page">
+      {dialog && <ConfirmDialog {...dialog} onClose={() => setDialog(null)} />}
       <div>
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-3"><Store className="h-7 w-7 text-forest" /> Pharmacies</h1>
         <p className="text-ink-soft mt-1">Approve new pharmacies, invite their staff and switch on paid sponsorships.</p>
@@ -36,7 +39,8 @@ export default function AdminPharmacies() {
               <p className="text-xs text-ink-soft">{a.contact_name} · {a.email}{a.phone ? ` · ${a.phone}` : ""} · SFDA {a.sfda_license}</p>
             </div>
             <button onClick={() => act(() => api.post(`/admin/pharmacy-applications/${a.application_id}/approve`), `${a.pharmacy_name} approved`)} className="btn-primary !py-1.5 !px-3 text-xs" data-testid={`approve-application-${a.application_id}`}><Check className="h-3.5 w-3.5" /> Approve</button>
-            <button onClick={() => { const reason = window.prompt("Reason shown to the pharmacy"); if (reason !== null) act(() => api.post(`/admin/pharmacy-applications/${a.application_id}/reject`, { reason }), "Application rejected"); }}
+            <button onClick={() => setDialog({ title: `Reject ${a.pharmacy_name}?`, text: "The reason is shown to the pharmacy.", input: "Reason", confirmLabel: "Reject", danger: true, testid: "reject-application-dialog",
+              onConfirm: (reason) => act(() => api.post(`/admin/pharmacy-applications/${a.application_id}/reject`, { reason }), "Application rejected") })}
               className="btn-outline !py-1.5 !px-3 text-xs !text-terracotta !border-terracotta" data-testid={`reject-application-${a.application_id}`}><X className="h-3.5 w-3.5" /> Reject</button>
           </div>
         ))}
@@ -52,7 +56,8 @@ export default function AdminPharmacies() {
             <span>{r.tier_label} · {r.amount_sar.toLocaleString()} SAR</span>
             <span className="text-xs text-ink-soft">by {r.requested_by_name}</span>
             <span className="ms-auto flex gap-2">
-              <button onClick={() => { const reference = window.prompt("Payment reference (optional)", ""); if (reference !== null) act(() => api.post(`/admin/sponsorship-requests/${r.request_id}/mark-paid`, { reference }), "Sponsorship is live"); }}
+              <button onClick={() => setDialog({ title: `Mark ${r.reference} as paid?`, text: `${r.pharmacy_name} · ${r.tier_label} · ${r.amount_sar.toLocaleString()} SAR. The placement starts straight away.`, input: "Payment reference (optional)", confirmLabel: "Mark paid", testid: "mark-paid-dialog",
+                onConfirm: (reference) => act(() => api.post(`/admin/sponsorship-requests/${r.request_id}/mark-paid`, { reference }), "Sponsorship is live") })}
                 className="btn-primary !py-1.5 !px-3 text-xs" data-testid={`mark-paid-${r.request_id}`}>Mark paid</button>
               <button onClick={() => act(() => api.post(`/admin/sponsorship-requests/${r.request_id}/decline`, { reason: "" }), "Request declined")}
                 className="btn-outline !py-1.5 !px-3 text-xs" data-testid={`decline-sponsor-${r.request_id}`}>Decline</button>
@@ -62,13 +67,13 @@ export default function AdminPharmacies() {
       </Section>
 
       <Section title="Partner pharmacies" count={pharmacies.length} testid="partner-pharmacies">
-        {pharmacies.map((p) => <PharmacyRow key={p.pharmacy_id} p={p} act={act} />)}
+        {pharmacies.map((p) => <PharmacyRow key={p.pharmacy_id} p={p} act={act} setDialog={setDialog} />)}
       </Section>
     </div>
   );
 }
 
-function PharmacyRow({ p, act }) {
+function PharmacyRow({ p, act, setDialog }) {
   const [form, setForm] = useState({ name: "", email: "" });
   const invite = (e) => {
     e.preventDefault();
@@ -80,14 +85,15 @@ function PharmacyRow({ p, act }) {
       <div className="flex flex-wrap items-center gap-2">
         <p className="font-semibold">{p.name_en}</p>
         <span className="text-xs text-ink-soft">{p.fulfilment_mode === "in_app" ? "Orders in app" : "Hands off to its own site"}</span>
-        {p.sponsored && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-700 border-emerald-200 capitalize" data-testid={`admin-pharmacy-sponsor-${p.pharmacy_id}`}>{sp.tier} until {sp.active_until ? new Date(sp.active_until).toLocaleDateString() : "—"}</span>}
+        {p.sponsored && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md border bg-emerald-50 text-emerald-700 border-emerald-200 capitalize" data-testid={`admin-pharmacy-sponsor-${p.pharmacy_id}`}>{sp.tier} · {sp.active_until ? `until ${new Date(sp.active_until).toLocaleDateString()}` : "no end date"}</span>}
       </div>
       <div className="mt-2 flex flex-wrap gap-2">
         {p.staff.length === 0 && <span className="text-xs text-ink-soft">No staff accounts yet.</span>}
         {p.staff.map((s) => (
           <span key={s.user_id} className="inline-flex items-center gap-2 text-xs border border-line rounded-full ps-3 pe-1 py-1 bg-white">
             {s.name} · {s.email} <StatusBadge status={s.status} />
-            <button onClick={() => window.confirm(`Remove ${s.name}?`) && act(() => api.delete(`/admin/pharmacies/${p.pharmacy_id}/staff/${s.user_id}`), "Removed")} className="p-1 rounded-full hover:bg-sand" data-testid={`remove-staff-${s.user_id}`}><Trash2 className="h-3 w-3 text-ink-soft" /></button>
+            <button onClick={() => setDialog({ title: `Remove ${s.name}?`, text: "They lose access to this pharmacy's orders.", confirmLabel: "Remove", danger: true, testid: "remove-staff-dialog",
+              onConfirm: () => act(() => api.delete(`/admin/pharmacies/${p.pharmacy_id}/staff/${s.user_id}`), "Removed") })} className="p-1 rounded-full hover:bg-sand" data-testid={`remove-staff-${s.user_id}`}><Trash2 className="h-3 w-3 text-ink-soft" /></button>
           </span>
         ))}
       </div>

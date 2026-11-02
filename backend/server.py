@@ -173,6 +173,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
+async def require_not_pharmacist(user=Depends(get_current_user)):
+    if user.get("role") == "pharmacist":
+        raise HTTPException(status_code=403, detail="Pharmacy accounts can't use patient features")
+    return user
+
+
 @api.post("/auth/register")
 async def register(body: RegisterRequest, response: Response):
     email = body.email.strip().lower()
@@ -827,7 +833,7 @@ class ChatSessionCreate(BaseModel):
 
 
 @api.post("/chat/sessions")
-async def create_chat_session(body: ChatSessionCreate, user=Depends(get_current_user)):
+async def create_chat_session(body: ChatSessionCreate, user=Depends(require_not_pharmacist)):
     profile = profile_key(user, body.profile_id)
     session = {
         "chat_session_id": f"chat_{uuid.uuid4().hex[:12]}",
@@ -1227,10 +1233,12 @@ async def list_doctors(specialty: Optional[str] = None, city: Optional[str] = No
         query["specialty"] = {"$regex": re.escape(specialty), "$options": "i"}
     if city:
         query["city"] = {"$regex": re.escape(city), "$options": "i"}
+    if user.get("role") == "patient" and user.get("account_id"):
+        query["account_id"] = {"$in": [user["account_id"], None]}
     doctors = await db.users.find(
         query,
         {"_id": 0, "user_id": 1, "name": 1, "email": 1, "specialty": 1, "clinic": 1, "city": 1, "bio": 1,
-         "clinic_phone": 1},
+         "clinic_phone": 1, "account_id": 1},
     ).to_list(200)
     return doctors
 
@@ -1250,9 +1258,11 @@ async def update_clinician_profile(body: ClinicianProfile, user=Depends(require_
 
 
 @api.put("/profile/doctor")
-async def choose_my_doctor(body: DoctorAssignment, user=Depends(get_current_user)):
+async def choose_my_doctor(body: DoctorAssignment, user=Depends(require_not_pharmacist)):
     """A patient picks the one doctor who may see their record. Choosing a new doctor transfers care."""
-    await _resolve_doctor(body.doctor_user_id)
+    doctor = await _resolve_doctor(body.doctor_user_id)
+    if doctor and doctor.get("account_id") and doctor["account_id"] != user.get("account_id"):
+        await _set_active_hospital(user, doctor["account_id"])
     await db.users.update_one(
         {"user_id": user["user_id"]},
         {"$set": {"assigned_doctor_user_id": body.doctor_user_id, "assigned_at": iso(),
@@ -2620,7 +2630,7 @@ async def list_pharmacies(city: Optional[str] = None, delivery_zone: Optional[st
         out.append(card)
     out.sort(key=lambda p: (p.pop("_rank"), p["name_en"] or ""))
     sponsored = [p["pharmacy_id"] for p in out if p["sponsored"]]
-    if sponsored:
+    if sponsored and user.get("role") == "patient":
         await db.pharmacies.update_many({"pharmacy_id": {"$in": sponsored}}, {"$inc": {"stats.impressions": 1}})
     return out
 
@@ -2816,7 +2826,7 @@ class CheckoutIn(BaseModel):
 
 
 @api.post("/pharmacy/checkout")
-async def checkout(body: CheckoutIn, user=Depends(get_current_user)):
+async def checkout(body: CheckoutIn, user=Depends(require_not_pharmacist)):
     cart = await _cart_doc(user, body.profile_id)
     if not cart["items"]:
         raise HTTPException(status_code=422, detail={"violations": [
@@ -2885,8 +2895,14 @@ async def checkout(body: CheckoutIn, user=Depends(get_current_user)):
 
 @api.get("/pharmacy/orders")
 async def list_orders(profile_id: Optional[str] = None, user=Depends(get_current_user)):
-    return await db.orders.find({"profile_id": profile_key(user, profile_id)}, {"_id": 0}
-                                ).sort("created_at", -1).to_list(50)
+    orders = await db.orders.find({"profile_id": profile_key(user, profile_id)}, {"_id": 0}
+                                  ).sort("created_at", -1).to_list(50)
+    unread = {m["_id"]: m["n"] for m in await db.order_messages.aggregate([
+        {"$match": {"order_id": {"$in": [o["order_id"] for o in orders]}, "sender": "pharmacy", "read_by_patient": False}},
+        {"$group": {"_id": "$order_id", "n": {"$sum": 1}}}]).to_list(100)}
+    for o in orders:
+        o["unread_messages"] = unread.get(o["order_id"], 0)
+    return orders
 
 
 @api.get("/pharmacy/orders/{order_id}")
@@ -3134,7 +3150,7 @@ class BookingIn(BaseModel):
 
 
 @api.post("/booking")
-async def book_visit(body: BookingIn, user=Depends(get_current_user)):
+async def book_visit(body: BookingIn, user=Depends(require_not_pharmacist)):
     if user.get("role") == "doctor":
         raise HTTPException(status_code=403, detail="Clinicians create visits from their schedule")
     doctor = await db.users.find_one({"user_id": body.doctor_user_id, "role": "doctor"}, USER_PROJECTION)
@@ -4745,6 +4761,8 @@ async def invite_pharmacy_staff(pharmacy_id: str, body: PharmacyStaffIn, request
     if existing:
         if existing.get("role") != "pharmacist" or existing.get("pharmacy_id") not in (None, pharmacy_id):
             raise HTTPException(status_code=409, detail="This email already belongs to another account")
+        if await db.pharmacy_applications.find_one({"user_id": existing["user_id"], "status": "pending"}):
+            raise HTTPException(status_code=409, detail="This person has a pending pharmacy application — approve or reject it first")
         await db.users.update_one({"user_id": existing["user_id"]}, {"$set": {"pharmacy_id": pharmacy_id}})
         return {"user_id": existing["user_id"], "invited": False, "linked": True}
     has_staff = await db.users.count_documents({"role": "pharmacist", "pharmacy_id": pharmacy_id})

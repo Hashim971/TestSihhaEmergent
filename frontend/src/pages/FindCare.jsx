@@ -7,8 +7,9 @@ export default function FindCare() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const [hospitals, setHospitals] = useState(null);
-  const [filters, setFilters] = useState({ q: "", city: "", specialty: params.get("specialty") || "" });
+  const [filters, setFilters] = useState({ q: "", city: "", specialty: "" });
   const reportId = params.get("report");
+  const suggested = params.get("specialty");
 
   const load = (f) => {
     setHospitals(null);
@@ -35,6 +36,11 @@ export default function FindCare() {
             ? "Your screening is ready. Pick where you'd like to be seen — you decide whether to share your record when you book."
             : "Sihha works on its own for your medications and screenings. When you want to see someone, pick a hospital here."}
         </p>
+        {suggested && (
+          <p className="mt-3 inline-flex items-center gap-2 text-sm bg-sage/20 text-forest rounded-full px-3 py-1" data-testid="find-care-suggested-specialty">
+            <Stethoscope className="h-3.5 w-3.5" /> Your screening suggests: <bdi className="font-semibold">{suggested}</bdi>
+          </p>
+        )}
       </div>
 
       <form onSubmit={(e) => { e.preventDefault(); load(filters); }} className="card p-4 grid grid-cols-1 md:grid-cols-4 gap-3">

@@ -3,16 +3,17 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Building2, LogOut, Search } from "lucide-react";
 import { api } from "../lib/api";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { useAuth } from "../context/AuthContext";
 
 export function MyHospitalCard() {
   const { user, setUser } = useAuth();
   const [link, setLink] = useState(null);
+  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => { api.get("/profile/hospital").then(({ data }) => setLink(data)).catch(() => setLink({ hospital: null })); }, []);
 
   const leave = async () => {
-    if (!window.confirm("Leave this hospital? Its doctors will no longer see your record.")) return;
     try {
       const { data } = await api.put("/profile/hospital", { account_id: null });
       setLink(data);
@@ -27,6 +28,8 @@ export function MyHospitalCard() {
   const h = link.hospital;
   return (
     <div className="card p-6" data-testid="my-hospital-card">
+      {confirming && <ConfirmDialog title="Leave this hospital?" text="Its doctors will no longer see your record." confirmLabel="Leave" danger
+        testid="leave-hospital-dialog" onConfirm={leave} onClose={() => setConfirming(false)} />}
       <h2 className="text-lg font-semibold flex items-center gap-2"><Building2 className="h-4 w-4 text-forest" /> My hospital</h2>
       {h ? (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
@@ -36,7 +39,7 @@ export function MyHospitalCard() {
           </div>
           <div className="flex gap-2">
             <Link to="/find-care" className="btn-outline !py-1.5 !px-3 text-xs" data-testid="change-hospital-btn"><Search className="h-3.5 w-3.5" /> Change hospital</Link>
-            <button onClick={leave} className="btn-outline !py-1.5 !px-3 text-xs !text-terracotta !border-terracotta" data-testid="leave-hospital-btn"><LogOut className="h-3.5 w-3.5" /> Leave</button>
+            <button onClick={() => setConfirming(true)} className="btn-outline !py-1.5 !px-3 text-xs !text-terracotta !border-terracotta" data-testid="leave-hospital-btn"><LogOut className="h-3.5 w-3.5" /> Leave</button>
           </div>
         </div>
       ) : (

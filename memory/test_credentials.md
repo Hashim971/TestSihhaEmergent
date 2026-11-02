@@ -57,7 +57,7 @@ All accounts use standard email/password JWT auth (httpOnly cookies).
 
 ## Hospital finder + pharmacy portal (added Jun 2026, seed: backend/seed_marketplace_portal.py, idempotent)
 - Standalone patient (no hospital, no doctor): `solo.patient@sihha.ai` / `Patient@123` → /find-care, Settings "My hospital".
-- Listed hospitals: Al Noor Specialist Hospital (dr.layla/dr.khalid? no — Al Noor doctors) and Jeddah Family Clinics.
+- Listed hospitals (listed_in_app=true): Al Noor Specialist Hospital (dr.layla etc.) and Jeddah Family Clinics (dr.khalid).
 - `dr.khalid@sihha.ai` / `Doctor@123` — Family Medicine doctor at Jeddah Family Clinics, publishes Sun–Thu 09:00–13:00 slots.
 - Pharmacist: `pharmacist@aldawaa.sihha.ai` / `Pharma@123` (owner of Al Dawaa Pharmacy, in-app orders) → sign in at /auth/pharmacy → /pharmacy-portal.
 - New pharmacies apply at /auth/pharmacy (tab "Join as a pharmacy"); approve in Super Admin → /admin/pharmacies.
