@@ -9,6 +9,8 @@ import { ShareScreeningCard } from "../components/ShareScreeningCard";
 import { TriageCard } from "../components/TriageCard";
 import { ChatPhotoPicker, ChatPhotoPreview } from "../components/ChatPhoto";
 
+const CHAT_KEY = "sihha:chat-session";
+
 export default function HealthChat() {
   const { activeProfile } = useAuth();
   const [sessions, setSessions] = useState([]);
@@ -47,9 +49,19 @@ export default function HealthChat() {
 
   const openSession = async (sid) => {
     setSessionId(sid);
+    sessionStorage.setItem(CHAT_KEY, sid);
     const res = await api.get(`/chat/sessions/${sid}/messages`);
     setMessages(res.data);
   };
+
+  useEffect(() => {
+    // Reopen the conversation the patient was in, so a reload or navigation never blanks the chat.
+    api.get("/chat/sessions").then(({ data }) => {
+      const saved = sessionStorage.getItem(CHAT_KEY);
+      const pick = data.find((s) => s.chat_session_id === saved) || data.find((s) => s.status === "active");
+      if (pick) openSession(pick.chat_session_id).catch(() => {});
+    }).catch(() => {});
+  }, []);
 
   const newSession = async () => {
     const res = await api.post("/chat/sessions", { profile_id: activeProfile.id });
@@ -64,6 +76,7 @@ export default function HealthChat() {
       const res = await api.post("/chat/sessions", { profile_id: activeProfile.id });
       sid = res.data.chat_session_id;
       setSessionId(sid);
+      sessionStorage.setItem(CHAT_KEY, sid);
       const msgs = await api.get(`/chat/sessions/${sid}/messages`);
       setMessages(msgs.data);
       loadSessions();
@@ -82,12 +95,17 @@ export default function HealthChat() {
         form.append("keep", attached.keep ? "true" : "false");
         photoId = (await api.post(`/chat/sessions/${sid}/photos`, form, { headers: { "Content-Type": "multipart/form-data" } })).data.photo_id;
       }
-      const resp = await fetch(`${API}/chat/sessions/${sid}/message`, {
+      const post = () => fetch(`${API}/chat/sessions/${sid}/message`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, photo_id: photoId }),
       });
+      let resp = await post();
+      if (resp.status === 401) {
+        await api.post("/auth/refresh");
+        resp = await post();
+      }
       if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || "Failed to send message");
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -115,6 +133,7 @@ export default function HealthChat() {
       }
       setMessages((prev) => {
         const copy = [...prev];
+        if (!full) return copy.slice(0, -1);
         copy[copy.length - 1] = { role: "assistant", content: full };
         return copy;
       });
@@ -179,7 +198,7 @@ export default function HealthChat() {
           <Plus className="h-4 w-4" /> New Screening
         </button>
         {lastReport && <ShareScreeningCard report={lastReport} />}
-        <div className="card p-3 space-y-1 max-h-[480px] overflow-y-auto" data-testid="chat-sessions-list">
+        <div className="card p-3 space-y-1 max-h-40 lg:max-h-[480px] overflow-y-auto" data-testid="chat-sessions-list">
           {sessions.length === 0 && <p className="text-sm text-ink-soft p-3">No screenings yet.</p>}
           {sessions.map((s) => (
             <button
@@ -197,7 +216,7 @@ export default function HealthChat() {
         </div>
       </div>
 
-      <div className="lg:col-span-3 card flex flex-col h-[640px]">
+      <div className="lg:col-span-3 card flex flex-col h-[75vh] lg:h-[640px] min-w-0">
         <div className="border-b border-line px-6 py-4 flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold">AI Health Screening</h2>

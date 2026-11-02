@@ -1991,5 +1991,21 @@
 "Could not add those medicines": "تعذّرت إضافة هذه الأدوية",
 "Medicine name — check it matches your pack": "اسم الدواء — تأكد أنه يطابق العلبة",
 "Enter the medicine name": "أدخل اسم الدواء",
-"Could not remove that photo": "تعذّر حذف الصورة"
+"Could not remove that photo": "تعذّر حذف الصورة",
+"Users": "المستخدمون",
+"real users": "مستخدمين حقيقيين",
+"Show demo accounts": "عرض الحسابات التجريبية",
+"Name, email or ID": "الاسم أو البريد أو المعرّف",
+"All roles": "كل الأدوار",
+"Pharmacists": "الصيادلة",
+"Details": "التفاصيل",
+"Suspend user": "إيقاف المستخدم",
+"Re-enable user": "إعادة تفعيل المستخدم",
+"Last sign-in": "آخر تسجيل دخول",
+"Last active": "آخر نشاط",
+"Joined": "تاريخ الانضمام",
+"Sign-in method": "طريقة الدخول",
+"No users match these filters.": "لا يوجد مستخدمون مطابقون.",
+"Demo": "تجريبي",
+"Who is using Sihha AI right now. \"Active\" means signed in or used the app in the period. Demo and test accounts are not counted.": "من يستخدم صحة AI الآن. «نشط» يعني سجّل الدخول أو استخدم التطبيق خلال الفترة. لا تُحتسب الحسابات التجريبية."
 }

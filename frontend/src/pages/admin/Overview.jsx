@@ -15,7 +15,7 @@ export default function AdminOverview() {
     <div className="space-y-8 fade-up" data-testid="admin-overview-page">
       <div>
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Platform overview</h1>
-        <p className="text-ink-soft mt-1">Who is using Sihha AI right now. "Active" means signed in or used the app in the period.</p>
+        <p className="text-ink-soft mt-1">Who is using Sihha AI right now. "Active" means signed in or used the app in the period. Demo and test accounts are not counted.</p>
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Stat icon={Activity} label="Active, last 30 days" value={t.active_month} sub={<><bdi>{t.active_week}</bdi> {"this week"} · <bdi>{t.active_today}</bdi> {"today"}</>} testid="stat-active-month" accent />

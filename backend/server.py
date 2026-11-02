@@ -84,6 +84,17 @@ JWT_ALGORITHM = "HS256"
 JWT_SECRET = os.environ["JWT_SECRET"]
 USER_PROJECTION = {"_id": 0, "password_hash": 0}
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip().lower()
+SUSPENDED_MSG = "This account has been suspended. Contact Sihha support."
+DEMO_EMAIL_RE = r"([@.]sihha\.ai$|\.demo$|@example\.com$|@test\.com$|@resend\.dev$)"
+# An explicit is_demo flag (set by the admin) wins over the email pattern.
+REAL_USER_FILTER = {"$or": [{"is_demo": False},
+                            {"is_demo": {"$exists": False}, "email": {"$not": {"$regex": DEMO_EMAIL_RE, "$options": "i"}}}]}
+
+
+def is_demo_user(u: dict) -> bool:
+    if "is_demo" in u:
+        return bool(u["is_demo"])
+    return bool(re.search(DEMO_EMAIL_RE, u.get("email") or "", re.I))
 
 
 def with_capabilities(user):
@@ -165,6 +176,8 @@ async def get_current_user(request: Request):
     user = await db.users.find_one({"user_id": payload["sub"]}, USER_PROJECTION)
     if not user or token_predates_password_change(payload, user):
         raise HTTPException(status_code=401, detail="User not found")
+    if user.get("suspended"):
+        raise HTTPException(status_code=403, detail=SUSPENDED_MSG)
     if (user.get("last_seen_at") or "") < iso(now_utc() - timedelta(minutes=10)):
         await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"last_seen_at": iso()}})
         await _record_activity(user["user_id"])
@@ -242,6 +255,8 @@ async def login(body: LoginRequest, request: Request, response: Response):
             await db.login_attempts.update_one({"identifier": key}, {"$set": update}, upsert=True)
         raise HTTPException(status_code=401, detail="Invalid email or password")
     await db.login_attempts.delete_many({"identifier": {"$in": [identifier, account_key]}})
+    if user.get("suspended"):
+        raise HTTPException(status_code=403, detail=SUSPENDED_MSG)
     if body.tenant_account_id and user.get("account_id") != body.tenant_account_id.upper() \
             and (user.get("email") or "").lower() != ADMIN_EMAIL:
         raise HTTPException(status_code=403, detail="This account isn't registered with this hospital.")
@@ -341,6 +356,8 @@ async def refresh_token(request: Request, response: Response):
     user = await db.users.find_one({"user_id": payload["sub"]}, USER_PROJECTION)
     if not user or token_predates_password_change(payload, user):
         raise HTTPException(status_code=401, detail="User not found")
+    if user.get("suspended"):
+        raise HTTPException(status_code=403, detail=SUSPENDED_MSG)
     response.set_cookie("access_token", create_access_token(user["user_id"], user["email"]),
                         httponly=True, secure=True, samesite="lax", max_age=900, path="/")
     return {"ok": True}
@@ -1015,6 +1032,35 @@ class ChatMessageIn(BaseModel):
     photo_id: Optional[str] = Field(default=None, max_length=40)
 
 
+CHAT_SOFT_QUESTIONS, CHAT_MAX_QUESTIONS = 4, 6
+
+
+def _text_language(text: str) -> Optional[str]:
+    arabic = len(re.findall(r"[\u0600-\u06FF]", text or ""))
+    latin = len(re.findall(r"[A-Za-z]", text or ""))
+    if not arabic and not latin:
+        return None
+    return "Arabic" if arabic > latin else "English"
+
+
+def _chat_turn_rules(history: list) -> str:
+    """Per-turn instructions: lock the reply language and enforce the question budget."""
+    user_texts = [m.get("content") or "" for m in history if m["role"] == "user"]
+    lang = next((lang for lang in map(_text_language, reversed(user_texts)) if lang), "English")
+    asked = sum(1 for m in history if m["role"] == "assistant")  # greeting counts as the first question
+    rules = [f"\n\n## This reply\n- The patient is writing in {lang}. Reply ONLY in {lang}, even if earlier messages "
+             "or the health profile use another language.",
+             "- At most two short sentences: an optional few-word acknowledgement, then one question. No repetition, no lectures.",
+             "- Do not repeat any question already asked above; move on to a new topic."]
+    if asked >= CHAT_MAX_QUESTIONS:
+        rules.append(f"- You have already asked {asked} questions — the limit. Ask NO more questions. Give the finishing "
+                     "summary now and tell them to tap Download Report.")
+    elif asked >= CHAT_SOFT_QUESTIONS:
+        rules.append(f"- You have asked {asked} of at most {CHAT_MAX_QUESTIONS} questions. If you already have a clear "
+                     "picture, finish now; otherwise ask only the single most important remaining question.")
+    return "\n".join(rules)
+
+
 @api.post("/chat/sessions/{sid}/message")
 async def send_chat_message(sid: str, body: ChatMessageIn, user=Depends(get_current_user)):
     session = await db.chat_sessions.find_one({"chat_session_id": sid, "user_id": user["user_id"]}, {"_id": 0})
@@ -1040,6 +1086,7 @@ async def send_chat_message(sid: str, body: ChatMessageIn, user=Depends(get_curr
     system = SCREENING_SYSTEM_PROMPT + await screening_subject_context(user, session["profile_id"])
     if context:
         system += "\n\nConversation so far:\n" + context
+    system += _chat_turn_rules(history)
 
     chat = LlmChat(api_key=LLM_KEY, session_id=sid, system_message=system).with_model("openai", "gpt-5.5")
 
@@ -5494,16 +5541,17 @@ async def platform_stats(admin=Depends(require_admin)):
     suspended = [a["account_id"] for a in await db.accounts.find({"status": "suspended"}, {"_id": 0, "account_id": 1}).to_list(1000)]
     roles = {}
     for role in ("patient", "doctor", "pharmacist"):
-        q = {"role": role, "email": {"$ne": ADMIN_EMAIL}}
+        q = {"role": role, "email": {"$ne": ADMIN_EMAIL}, **REAL_USER_FILTER}
         row = {"total": await db.users.count_documents(q),
-               "in_good_standing": await db.users.count_documents({**q, "account_id": {"$nin": suspended}})}
+               "in_good_standing": await db.users.count_documents({**q, "account_id": {"$nin": suspended}, "suspended": {"$ne": True}})}
         for key, since in windows.items():
             row[f"active_{key}"] = await db.users.count_documents(
-                {**q, "$or": [{"last_seen_at": {"$gte": since}}, {"last_login_at": {"$gte": since}}]})
+                {"$and": [q, {"$or": [{"last_seen_at": {"$gte": since}}, {"last_login_at": {"$gte": since}}]}]})
         roles[role] = row
     totals = {k: sum(r[k] for r in roles.values()) for k in next(iter(roles.values()))}
+    real_ids = [u["user_id"] for u in await db.users.find(REAL_USER_FILTER, {"_id": 0, "user_id": 1}).to_list(100000)]
     daily = await db.user_activity_days.aggregate([
-        {"$match": {"day": {"$gte": (now - timedelta(days=29)).strftime("%Y-%m-%d")}}},
+        {"$match": {"day": {"$gte": (now - timedelta(days=29)).strftime("%Y-%m-%d")}, "user_id": {"$in": real_ids}}},
         {"$group": {"_id": "$day", "n": {"$sum": 1}}}, {"$sort": {"_id": 1}}]).to_list(40)
     by_day = {d["_id"]: d["n"] for d in daily}
     series = [{"day": (now - timedelta(days=i)).strftime("%Y-%m-%d"),
@@ -5514,6 +5562,98 @@ async def platform_stats(admin=Depends(require_admin)):
             "accounts": {"total": sum(statuses.values()), "by_status": statuses,
                          "not_suspended": sum(n for s, n in statuses.items() if s != "suspended")},
             "pharmacies": await db.pharmacies.count_documents({"active": True}), "generated_at": iso()}
+
+
+# ---------- Super admin: users ----------
+ADMIN_USER_FIELDS = {"_id": 0, "user_id": 1, "email": 1, "name": 1, "role": 1, "account_id": 1, "account_role": 1,
+                     "created_at": 1, "last_login_at": 1, "last_seen_at": 1, "suspended": 1, "suspended_at": 1,
+                     "suspended_reason": 1, "is_demo": 1, "auth_provider": 1, "picture": 1, "phone": 1}
+
+
+async def _with_account_names(users: list) -> list:
+    ids = list({u["account_id"] for u in users if u.get("account_id")})
+    names = {a["account_id"]: a["name"] for a in await db.accounts.find(
+        {"account_id": {"$in": ids}}, {"_id": 0, "account_id": 1, "name": 1}).to_list(len(ids) or 1)}
+    for u in users:
+        u["account_name"] = names.get(u.get("account_id"))
+        u["is_demo"] = is_demo_user(u)
+        u["suspended"] = bool(u.get("suspended"))
+        u["is_super_admin"] = (u.get("email") or "").lower() == ADMIN_EMAIL
+    return users
+
+
+@api.get("/admin/users")
+async def admin_list_users(q: str = "", role: str = "", status: str = "", include_demo: bool = False,
+                           page: int = 1, limit: int = 25, admin=Depends(require_admin)):
+    clauses = [] if include_demo else [REAL_USER_FILTER]
+    if q.strip():
+        rx = {"$regex": re.escape(q.strip()), "$options": "i"}
+        clauses.append({"$or": [{"email": rx}, {"name": rx}, {"user_id": rx}]})
+    if role in ("patient", "doctor", "pharmacist"):
+        clauses.append({"role": role})
+    if status == "suspended":
+        clauses.append({"suspended": True})
+    elif status == "active":
+        clauses.append({"suspended": {"$ne": True}})
+    query = {"$and": clauses} if clauses else {}
+    limit = max(1, min(limit, 100))
+    total = await db.users.count_documents(query)
+    users = await db.users.find(query, ADMIN_USER_FIELDS).sort([("last_seen_at", -1), ("created_at", -1)]) \
+        .skip((max(page, 1) - 1) * limit).limit(limit).to_list(limit)
+    demo_hidden = 0 if include_demo else await db.users.count_documents({"$nor": [REAL_USER_FILTER]})
+    return {"total": total, "items": await _with_account_names(users), "demo_hidden": demo_hidden}
+
+
+@api.get("/admin/users/{user_id}")
+async def admin_user_detail(user_id: str, admin=Depends(require_admin)):
+    u = await db.users.find_one({"user_id": user_id}, ADMIN_USER_FIELDS)
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    (u,) = await _with_account_names([u])
+    since = (now_utc() - timedelta(days=29)).strftime("%Y-%m-%d")
+    days = [d["day"] for d in await db.user_activity_days.find(
+        {"user_id": user_id, "day": {"$gte": since}}, {"_id": 0, "day": 1}).sort("day", -1).to_list(31)]
+    uid = {"user_id": user_id}
+    activity = {
+        "active_days_30": len(days), "recent_active_days": days[:10],
+        "screenings": await db.chat_sessions.count_documents(uid),
+        "reports": await db.health_reports.count_documents(uid),
+        "medications": await db.medications.count_documents({**uid, "active": {"$ne": False}}),
+        "vitals": await db.vitals.count_documents(uid),
+        "dependents": await db.dependents.count_documents(uid),
+        "encounters": await db.encounters.count_documents({"$or": [{"patient_user_id": user_id}, {"doctor_user_id": user_id}]}),
+    }
+    return {**u, "activity": activity}
+
+
+class AdminUserSuspend(BaseModel):
+    suspended: bool
+    reason: Optional[str] = Field(default=None, max_length=300)
+
+
+@api.post("/admin/users/{user_id}/suspend")
+async def admin_suspend_user(user_id: str, body: AdminUserSuspend, admin=Depends(require_admin)):
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "email": 1})
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user_id == admin["user_id"] or (u.get("email") or "").lower() == ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="The super admin can't be suspended")
+    update = {"suspended": body.suspended, "suspended_at": iso() if body.suspended else None,
+              "suspended_reason": (body.reason or "").strip() or None if body.suspended else None}
+    await db.users.update_one({"user_id": user_id}, {"$set": update})
+    return await admin_user_detail(user_id, admin)
+
+
+class AdminUserDemo(BaseModel):
+    is_demo: bool
+
+
+@api.post("/admin/users/{user_id}/demo")
+async def admin_mark_demo(user_id: str, body: AdminUserDemo, admin=Depends(require_admin)):
+    res = await db.users.update_one({"user_id": user_id}, {"$set": {"is_demo": body.is_demo}})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="User not found")
+    return await admin_user_detail(user_id, admin)
 
 
 @api.get("/admin/staging")

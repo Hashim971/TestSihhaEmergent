@@ -23,6 +23,7 @@ import DoctorSchedule from "./pages/DoctorSchedule";
 import AdminAssignments from "./pages/AdminAssignments";
 import AdminLayout from "./pages/admin/AdminLayout";
 import Accounts from "./pages/admin/Accounts";
+import AdminUsers from "./pages/admin/Users";
 import AccountWorkspace from "./pages/admin/AccountWorkspace";
 import FeatureFlags from "./pages/admin/FeatureFlags";
 import MyHospital from "./pages/MyHospital";
@@ -116,6 +117,7 @@ function AppRouter() {
             <Route path="/admin/overview" element={<AdminOverview />} />
             <Route path="/admin/staging" element={<AdminStaging />} />
             <Route path="/admin/accounts" element={<Accounts />} />
+            <Route path="/admin/users" element={<AdminUsers />} />
             <Route path="/admin/accounts/:accountId" element={<AccountWorkspace />} />
             <Route path="/admin/flags" element={<FeatureFlags />} />
             <Route path="/admin/demo-requests" element={<DemoRequests />} />
