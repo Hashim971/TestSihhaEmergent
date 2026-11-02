@@ -1,0 +1,43 @@
+{
+  "summary": "Retested iteration_15 fixes. Backend: 26/26 pytest pass (7 new iter16 + 19 iter15 regression). Feature flags now enforced server-side (403 code=feature_disabled for /api/pharmacy*, /api/chat* etc.; global OFF blocks omar and sami; Al Noor account override ON re-enables for omar only; account override OFF with global ON also blocks; unauthenticated still 401). Frontend: FeatureRoute redirects /pharmacy and /pharmacy/orders to /dashboard with toast, nav-pharmacy hidden; other gated routes unaffected; with override ON /pharmacy loads. Features tab Reset removes override ('Uses global (on)'). AccountWorkspace switcher/quick nav no longer shows stale people data (only new account's users endpoint is queried). Onboarding after tenant registration shows 'Al Noor Care'. Checklist: new account 1/8, 2/8 after saving language in Domain & language tab. Invite existing patient as doctor -> 409 'Approve clinician access in Doctor assignments first', role unchanged. Landing 390px: brand not truncated, 3 audience tabs in one row, aria-selected set, zero horizontal overflow. Admin workspace 1520px wide at 1920 (full width). '1 customer' singular. Staging bar visible ~200ms after reload (cached env in localStorage). All flags restored to default (all on except white_label global off; Al Noor features = {white_label: true}).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "enforce_feature_flags middleware", "issue": "_flag_cache is per-process (15s TTL); fine with --workers 1, but with multiple workers/pods a flag change can take up to 15s to apply on other processes. Acceptable, just be aware for production."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "FeatureRoute", "issue": "On a fresh page load of /pharmacy with the flag OFF, flags are still null on first render so FeatureRoute renders <Pharmacy/> briefly; it fires 5 API calls (/pharmacy/refills, pharmacies, catalog, cart, orders) that all return 403 before redirecting. Render a loader while flags === null (for signed-in users) instead of children.", "selector": "components/FeatureRoute.jsx", "priority": "LOW"},
+      {"component": "PeopleTab", "issue": "Shows '0 customers' (initial state total=0) for ~200-500ms before the first load completes after switching accounts; consider a loading state instead of 0.", "selector": "customers-count", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Onboarding (General step)", "issues": ["Date of birth uses the native browser date picker (mm/dd/yyyy) instead of a shadcn calendar - pre-existing"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_feature_enforcement_iter16.py",
+    "/app/backend/tests/flag_helper_iter16.py",
+    "/app/backend/tests/test_superadmin_staging_iter15.py",
+    "/app/test_reports/pytest/pytest_iter16.xml"
+  ],
+  "action_items": [
+    "Optional: FeatureRoute should show a loader while flags are loading to avoid mounting a disabled page and firing 403 calls",
+    "Optional: PeopleTab loading state instead of '0 customers' placeholder"
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~4200 lines - split super-admin/white-label/feature-flag sections into routers",
+    "update_account replaces the entire features dict (PATCH features is not a merge) - FeaturesTab must always send the full map; API consumers could accidentally wipe white_label override",
+    "/prescriptions/{id}/basket-options is gated by 'prescriptions' only, not 'pharmacy_marketplace' - check whether basket/pharmacy matching should also be hidden when the marketplace is off"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_feature_enforcement_iter16.py",
+    "/app/backend/tests/flag_helper_iter16.py"
+  ],
+  "success_rate": {"backend": "100% (26/26)", "frontend": "100% of requested flows (2 low-priority polish items)"},
+  "seed_data_creation": "Temporary QA account 'QA Iter16 Clinic' + 1 customer and a tenant-registered patient were created and deleted. No persistent seed data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Al Noor = ACC-12AFFE (omar, noura customers; dr.layla account_admin). Use `python /app/backend/tests/flag_helper_iter16.py off|override|globalon|restore|show` to toggle pharmacy flag state; always run 'restore' at the end. Default state: all global flags on except white_label; Al Noor features {white_label: true}. Live transcription not exercised."
+}

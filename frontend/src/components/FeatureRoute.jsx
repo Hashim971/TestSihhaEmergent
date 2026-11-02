@@ -9,5 +9,6 @@ export function FeatureRoute({ flag, children }) {
   useEffect(() => {
     if (off) toast.info("That feature isn't available for your organisation.");
   }, [off]);
+  if (!flags) return <p className="text-sm text-ink-soft" data-testid="feature-route-loading">Loading…</p>;
   return off ? <Navigate to="/dashboard" replace /> : children;
 }

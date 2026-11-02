@@ -57,7 +57,7 @@ export function PlatformProvider({ children }) {
     loadTenant();
   }, [loadTenant]);
 
-  const refreshFlags = useCallback(() => api.get("/flags").then(({ data }) => setFlags(data)).catch(() => {}), []);
+  const refreshFlags = useCallback(() => api.get("/flags").then(({ data }) => setFlags(data)).catch(() => setFlags({})), []);
 
   const exitTenantPreview = () => {
     sessionStorage.removeItem(TENANT_KEY);

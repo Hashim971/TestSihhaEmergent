@@ -6,7 +6,7 @@ import { StatusBadge, Modal, inputCls, labelCls, errorText } from "./ui";
 
 export function PeopleTab({ accountId, kind, initialQuery = "", readOnly = false, base }) {
   const [q, setQ] = useState(initialQuery);
-  const [data, setData] = useState({ total: 0, items: [] });
+  const [data, setData] = useState({ total: null, items: [] });
   const [inviting, setInviting] = useState(false);
   const endpoint = base || `/admin/accounts/${accountId}/users`;
 
@@ -43,7 +43,7 @@ export function PeopleTab({ accountId, kind, initialQuery = "", readOnly = false
           <Search className="h-4 w-4 text-ink-soft absolute left-3 top-1/2 -translate-y-1/2" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name or email" data-testid={`${kind}-search-input`} className={`${inputCls} pl-9`} />
         </div>
-        <span className="text-sm text-ink-soft mr-auto" data-testid={`${kind}-count`}>{data.total} {isCustomers ? (data.total === 1 ? "customer" : "customers") : "staff"}</span>
+        <span className="text-sm text-ink-soft mr-auto" data-testid={`${kind}-count`}>{data.total === null ? "Loading…" : `${data.total} ${isCustomers ? (data.total === 1 ? "customer" : "customers") : "staff"}`}</span>
         {!readOnly && (
           <button onClick={() => setInviting(true)} data-testid={`${kind}-invite-btn`} className="inline-flex items-center gap-2 bg-ink text-white rounded-md px-4 py-2 text-sm font-medium hover:opacity-90">
             <UserPlus className="h-4 w-4" /> {isCustomers ? "Add customer" : "Invite user"}
@@ -62,7 +62,7 @@ export function PeopleTab({ accountId, kind, initialQuery = "", readOnly = false
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
-            {data.items.length === 0 && (
+            {data.total !== null && data.items.length === 0 && (
               <tr><td colSpan={5} className="px-4 py-10 text-center text-ink-soft" data-testid={`${kind}-empty`}>No one matches yet.</td></tr>
             )}
             {data.items.map((u) => (

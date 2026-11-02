@@ -338,3 +338,25 @@ Answers "does this screening need a visit, and how does it get booked?" plus e-p
 - Verified live Emergent-managed speech-to-text (OpenAI `whisper-1` via EMERGENT_LLM_KEY, `agents/transcription/hosted.py`) end-to-end with real Arabic audio: upload → transcript (status complete, arabic, confidence 0.756, 2 segments) → SOAP note generated.
 - Probe script: `/app/scripts/live_stt_e2e.py`.
 - Still pending: real Google OAuth roundtrip verification; Week View, Vitals Trend Warnings, Pharmacist Inbox, Ad Console, Forgot password.
+
+## 2026-06 — Phase B: auth hardening, live transcript, DB-down notice
+- Forgot/reset password (Emergent managed email via Resend, hashed single-use 1h tokens, generic replies, background send, per-email + per-IP throttle, old sessions revoked on reset).
+- Google sign-in hardened (async exchange, rate limit by real client IP = X-Forwarded-For[-3], no session tokens stored). Login lockout per IP+email (5) and per account (10).
+- Live Arabic transcript in scribe (~10s slices → POST /api/encounters/{id}/audio/live, not stored).
+- "Service temporarily unavailable" overlay + /api/health + 503 handlers for Mongo outages.
+
+## 2026-06 — Phase C: staging, super admin, feature switches, white-label, PWA, landing
+- APP_ENV secret (test slot=staging, live slot=production). STAGING bar in preview. White-label endpoints/tabs only work in staging.
+- Accounts (hospitals/clinics) with unique ACC-XXXXXX IDs; users.account_id + account_role (member/account_admin).
+- Super admin console /admin: account switcher with ID chip + recent accounts, Ctrl+K quick nav (accounts + people), accounts list (search name/ID, type/status filters, export CSV, add), account workspace tabs: Overview, Staff, Customers, Branding (logo upload to object storage, colours, live preview), Features (per-account overrides), Domain & language (CNAME check), Import data (CSV patients + history), Onboarding (checklist + "what a hospital needs").
+- Feature switches /admin/flags (global) enforced server-side by middleware (403 feature_disabled) + FeatureRoute guards.
+- Tenant branding via custom domain or ?tenant=ACC-… (staging); registrations on tenant pages join that account. Hospital admins get /my-hospital.
+- Installable PWA (manifest, sw.js, icons, install card in Settings).
+- Investor-ready landing page revamp + /api/demo-requests (admin list at GET /api/admin/demo-requests, no UI yet).
+- Tests: iteration_13–16 all passing.
+
+## Backlog
+- P1: Demo requests inbox UI in super admin; native App Store / Play Store wrapper (Capacitor) when ready
+- P1: Week View, Vitals Trend Warnings, Pharmacist Inbox, Pharmacy Ad Console
+- P2: Unleash integration if external flag management is ever needed; per-tenant Arabic UI (RTL)
+- Note: custom hospital domains must also be linked on the production deployment to serve HTTPS.
