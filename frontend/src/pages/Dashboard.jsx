@@ -3,7 +3,7 @@ import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { HeartPulse, Droplets, Thermometer, Wind, Gauge, Plus, Zap, ClipboardList } from "lucide-react";
+import { HeartPulse, Droplets, Thermometer, Wind, Gauge, Plus, ClipboardList } from "lucide-react";
 import { Link } from "react-router-dom";
 import { VitalTrends } from "../components/VitalTrends";
 import { RecentVisits } from "../components/RecentVisits";
@@ -23,7 +23,6 @@ export default function Dashboard() {
   const [trends, setTrends] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ heart_rate: "", systolic: "", diastolic: "", glucose: "", spo2: "", temperature: "" });
-  const [simulating, setSimulating] = useState(false);
   const [intakeTodo, setIntakeTodo] = useState(null);
 
   useEffect(() => {
@@ -64,17 +63,6 @@ export default function Dashboard() {
     load();
   };
 
-  const simulate = async () => {
-    setSimulating(true);
-    try {
-      await api.post("/vitals/simulate", { profile_id: activeProfile.id });
-      toast.success("7 days of wearable data synced");
-      load();
-    } finally {
-      setSimulating(false);
-    }
-  };
-
   return (
     <div className="space-y-8 fade-up" data-testid="patient-dashboard">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -83,9 +71,6 @@ export default function Dashboard() {
           <p className="text-ink-soft mt-1">Real-time overview for <span className="font-medium text-ink">{activeProfile.name}</span></p>
         </div>
         <div className="flex gap-3">
-          <button onClick={simulate} disabled={simulating} data-testid="simulate-wearable-btn" className="btn-outline">
-            <Zap className="h-4 w-4" /> {simulating ? "Syncing…" : "Sync Wearable (demo)"}
-          </button>
           <button onClick={() => setShowForm(!showForm)} data-testid="add-vitals-btn" className="btn-primary">
             <Plus className="h-4 w-4" /> Log Vitals
           </button>
@@ -178,7 +163,7 @@ function ChartCard({ title, data, dataKey, color, testid }) {
     <div className="card p-6" data-testid={testid}>
       <h3 className="text-lg font-semibold mb-4">{title}</h3>
       {filtered.length === 0 ? (
-        <p className="text-sm text-ink-soft py-10 text-center">No readings in the last 7 days. Log vitals or sync your wearable.</p>
+        <p className="text-sm text-ink-soft py-10 text-center">No readings in the last 7 days. Tap Log Vitals to add your first reading.</p>
       ) : (
         <ResponsiveContainer width="100%" height={220}>
           <LineChart data={filtered}>

@@ -163,10 +163,10 @@ export default function DoctorSchedule() {
               key={e.encounter_id}
               onClick={() => navigate(`/doctor/encounters/${e.encounter_id}`)}
               data-testid={`encounter-row-${e.encounter_id}`}
-              className="card w-full p-5 text-left flex items-center gap-4 hover:shadow-md"
+              className="card w-full p-4 sm:p-5 text-left flex flex-wrap sm:flex-nowrap items-center gap-x-4 gap-y-2 hover:shadow-md"
               style={{ transition: "box-shadow 0.2s ease, transform 0.2s ease" }}
             >
-              <div className="w-32 shrink-0">
+              <div className="w-20 sm:w-32 shrink-0">
                 <p className="font-semibold text-sm">
                   {new Date(e.scheduled_at).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "Asia/Riyadh" })}
                 </p>
@@ -178,7 +178,7 @@ export default function DoctorSchedule() {
                 <p className="font-semibold truncate">{e.patient_name}</p>
                 <p className="text-xs text-ink-soft truncate">{e.reason_for_visit || "No reason recorded"}</p>
               </div>
-              <span className={`text-[10px] uppercase tracking-wider font-bold px-2.5 py-1 rounded-full ${badge.cls}`}>
+              <span className={`order-last sm:order-none ms-24 sm:ms-0 text-[10px] uppercase tracking-wider font-bold px-2.5 py-1 rounded-full ${badge.cls}`}>
                 {badge.label}
               </span>
               <span className="text-[10px] uppercase tracking-wider text-ink-soft hidden sm:block">{e.status}</span>

@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { Navigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import { FileHeart, AlertTriangle, Languages, Stethoscope, Printer, Share2 } from "lucide-react";
 
 import { toast } from "sonner";
@@ -36,6 +38,12 @@ const LANGS = [
 ];
 
 export default function VisitSummaries() {
+  const { user } = useAuth();
+  if (!user.account_id) return <Navigate to="/dashboard" replace />;
+  return <VisitSummariesList />;
+}
+
+function VisitSummariesList() {
   const [rows, setRows] = useState(null);
   const [lang, setLang] = useState("ar");
 

@@ -4,6 +4,7 @@ import jsPDF from "jspdf";
 import { api } from "../lib/api";
 import { toast } from "sonner";
 import { FileSignature, Download, ShoppingBag, Lock, Store } from "lucide-react";
+import { PrescriptionUpload } from "../components/PrescriptionUpload";
 
 export default function Prescriptions() {
   const [rows, setRows] = useState(null);
@@ -73,6 +74,7 @@ export default function Prescriptions() {
           What your doctor prescribed after a visit. A pharmacist still checks it before anything is dispensed.
         </p>
       </div>
+      <PrescriptionUpload />
 
       {rows === null && <div className="card p-6 text-sm text-ink-soft">Loading your prescriptions…</div>}
       {rows?.length === 0 && (

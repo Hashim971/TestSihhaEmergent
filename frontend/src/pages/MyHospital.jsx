@@ -29,7 +29,7 @@ export default function MyHospital() {
         <IdChip id={overview.account.account_id} testid="my-hospital-id" />
         <div className="ml-auto"><ReportDownload endpoint="/account/report" initialMonth={params.get("report")} testid="my-hospital-report" /></div>
       </div>
-      <div className="flex gap-1 border-b border-line mb-6">
+      <div className="flex gap-1 border-b border-line mb-6 overflow-x-auto whitespace-nowrap">
         {TABS.map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} data-testid={`my-hospital-tab-${k}`}
             className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px ${tab === k ? "border-forest text-forest" : "border-transparent text-ink-soft"}`}>{label}</button>

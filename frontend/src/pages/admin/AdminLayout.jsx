@@ -79,7 +79,20 @@ export default function AdminLayout() {
           <button onClick={() => setQuick(true)} data-testid="quick-nav-btn-mobile" className="p-2 rounded-full hover:bg-sand"><Search className="h-4 w-4" /></button>
           <NavLink to="/admin/accounts" className="text-xs font-medium text-forest" data-testid="admin-nav-accounts-mobile">Accounts</NavLink>
           <NavLink to="/admin/flags" className="text-xs font-medium text-forest" data-testid="admin-nav-flags-mobile">Switches</NavLink>
+          <button onClick={logout} data-testid="admin-logout-btn-mobile" className="p-2 rounded-full hover:bg-sand" aria-label="Sign out"><LogOut className="h-4 w-4 text-ink-soft" /></button>
         </header>
+        <nav className="md:hidden flex gap-1 overflow-x-auto whitespace-nowrap bg-white border-b border-line px-3 py-2" data-testid="admin-mobile-tabs">
+          {nav.map(({ to, label, icon: Icon, testid }) => (
+            <NavLink key={to} to={to} data-testid={`${testid}-tab-mobile`}
+              className={({ isActive }) => `inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium shrink-0 ${isActive ? "bg-forest text-white" : "text-ink-soft bg-sand"}`}>
+              <Icon className="h-3.5 w-3.5" /> {label}
+            </NavLink>
+          ))}
+          <button onClick={() => navigate(user.role === "doctor" ? "/doctor" : "/dashboard")} data-testid="admin-back-to-app-btn-mobile"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium shrink-0 text-ink-soft border border-line">
+            <ArrowLeft className="h-3.5 w-3.5" /> Back to app
+          </button>
+        </nav>
         <main className="p-4 sm:p-6 lg:p-10 w-full max-w-[1600px]">
           <Outlet />
         </main>

@@ -140,18 +140,21 @@ function AddToMedications({ result }) {
   const { activeProfile } = useAuth();
   const [added, setAdded] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [times, setTimes] = useState("08:00");
+  const [open, setOpen] = useState(false);
+  const [dose, setDose] = useState("");
+  const [times, setTimes] = useState(["08:00"]);
 
   const add = async () => {
-    const slots = times.split(",").map((t) => t.trim()).filter((t) => /^\d{2}:\d{2}$/.test(t));
+    const slots = times.filter((t) => /^\d{2}:\d{2}$/.test(t));
+    if (!dose.trim()) return toast.error("Enter the dose you take");
     if (slots.length === 0) return toast.error("Pick a time of day first");
     setSaving(true);
     try {
       await api.post("/medications", {
         name: result.name,
-        dosage: result.dosage_info?.slice(0, 60) || "As directed",
-        times: times.split(",").map((t) => t.trim()).filter((t) => /^\d{2}:\d{2}$/.test(t)),
-        instructions: "Added from a pill photo — confirm the dose with your pharmacist.",
+        dosage: dose.trim(),
+        times: [...new Set(slots)].sort(),
+        instructions: "Added from Pill ID — confirm the dose with your pharmacist.",
         units_per_dose: 1,
         profile_id: activeProfile.id,
       });
@@ -167,23 +170,51 @@ function AddToMedications({ result }) {
   if (added) {
     return (
       <p className="text-sm text-forest flex items-center gap-2" data-testid="pill-added-confirmation">
-        <CheckCircle2 className="h-4 w-4" /> Added to your medications — set the exact times on the Medications page.
+        <CheckCircle2 className="h-4 w-4" /> Added to your Medications page — reminders start at the times you set.
       </p>
     );
   }
 
-  return (
-    <div className="flex flex-wrap items-center gap-2 border border-line rounded-xl px-3 py-2.5"
-      data-testid="add-pill-to-meds">
-      <span className="text-sm">Take this daily at</span>
-      <input type="time" value={times} onChange={(e) => setTimes(e.target.value)}
-        data-testid="pill-med-times-input"
-        className="border border-line rounded-lg px-2.5 py-1.5 text-sm w-32" />
-      <button onClick={add} disabled={saving} className="btn-primary !py-1.5 !px-3 text-xs"
-        data-testid="add-pill-to-meds-btn">
-        <Plus className="h-3.5 w-3.5" /> {saving ? "Adding…" : "Add to my medications"}
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="btn-primary" data-testid="add-pill-open-btn">
+        <Plus className="h-4 w-4" /> Add to my medications
       </button>
-      <span className="text-xs text-ink-soft">AI identification — check with a pharmacist first.</span>
+    );
+  }
+
+  return (
+    <div className="border border-line rounded-xl p-4 space-y-3" data-testid="add-pill-to-meds">
+      <div>
+        <label className="text-xs uppercase tracking-[0.15em] text-ink-soft">Dose</label>
+        <input value={dose} onChange={(e) => setDose(e.target.value)} placeholder="e.g. 1 tablet · 500 mg"
+          data-testid="pill-med-dose-input"
+          className="mt-1 w-full border border-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest" />
+      </div>
+      <div>
+        <label className="text-xs uppercase tracking-[0.15em] text-ink-soft">Times each day</label>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          {times.map((t, i) => (
+            <span key={i} className="inline-flex items-center gap-1">
+              <input type="time" value={t} onChange={(e) => setTimes(times.map((x, j) => (j === i ? e.target.value : x)))}
+                data-testid={`pill-med-time-input-${i}`} className="border border-line rounded-lg px-2.5 py-1.5 text-sm w-32" />
+              {times.length > 1 && (
+                <button type="button" onClick={() => setTimes(times.filter((_, j) => j !== i))} className="text-ink-soft text-xs"
+                  data-testid={`pill-med-time-remove-${i}`} aria-label="Remove time">✕</button>
+              )}
+            </span>
+          ))}
+          <button type="button" onClick={() => setTimes([...times, "20:00"])} className="btn-outline !py-1.5 !px-3 text-xs"
+            data-testid="pill-med-time-add-btn"><Plus className="h-3.5 w-3.5" /> Add time</button>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={add} disabled={saving} className="btn-primary" data-testid="add-pill-to-meds-btn">
+          <Plus className="h-4 w-4" /> {saving ? "Adding…" : "Add"}
+        </button>
+        <button onClick={() => setOpen(false)} className="text-sm text-ink-soft underline" data-testid="add-pill-cancel-btn">Cancel</button>
+      </div>
+      <p className="text-xs text-ink-soft">AI identification — check with a pharmacist first.</p>
     </div>
   );
 }

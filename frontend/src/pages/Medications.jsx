@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import { Plus, Trash2, Check, X, Pill, TrendingUp } from "lucide-react";
+import { PrescriptionUpload } from "../components/PrescriptionUpload";
 
 export default function Medications() {
   const { activeProfile } = useAuth();
@@ -69,8 +70,10 @@ export default function Medications() {
         </button>
       </div>
 
+      <PrescriptionUpload onAdded={load} />
+
       {showForm && (
-        <form onSubmit={addMed} className="card p-6 grid grid-cols-1 md:grid-cols-4 gap-4" data-testid="medication-form">
+        <form onSubmit={addMed} className="card p-5 sm:p-6 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4" data-testid="medication-form">
           <Input label="Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} testid="med-input-name" placeholder="e.g. Metformin" />
           <Input label="Dosage" value={form.dosage} onChange={(v) => setForm({ ...form, dosage: v })} testid="med-input-dosage" placeholder="e.g. 500mg" />
           <Input label="Times (comma separated)" value={form.times} onChange={(v) => setForm({ ...form, times: v })} testid="med-input-times" placeholder="08:00, 20:00" />
@@ -97,7 +100,7 @@ export default function Medications() {
               <div key={i} className={`flex items-center justify-between border rounded-xl px-4 py-3 ${
                 item.status === "taken" ? "border-sage bg-sage/10" : item.status === "missed" ? "border-terracotta/40 bg-terracotta/5" : "border-line"
               }`} data-testid={`dose-row-${item.medication_id}-${item.time}`}>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 min-w-0">
                   <span className="font-heading font-bold text-forest w-14">{item.time}</span>
                   <div>
                     <p className="font-medium text-sm">{item.name} <span className="text-ink-soft">· {item.dosage}</span></p>

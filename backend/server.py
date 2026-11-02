@@ -5607,6 +5607,136 @@ async def get_chat_photo(photo_id: str, user=Depends(get_current_user)):
     return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
 
 
+# ---------- Patient-uploaded prescriptions (medication adherence) ----------
+RX_READ_PROMPT = """You read photos of medical prescriptions (Arabic or English, printed or handwritten).
+Return ONLY a JSON object, no prose:
+{"readable": true|false, "prescriber": string|null, "prescribed_on": string|null,
+ "medications": [{"name": string, "dosage": string, "frequency": string, "times": ["HH:MM"],
+                  "instructions": string|null, "quantity": integer|null}],
+ "notes": string|null}
+Rules: list only medicines actually written on the prescription — never invent any. "dosage" is the strength and
+amount per dose (e.g. "500 mg, 1 tablet"). Suggest "times" from the frequency: once daily ["08:00"], twice daily
+["08:00","20:00"], three times ["08:00","14:00","20:00"], four times ["08:00","12:00","16:00","20:00"], at bedtime
+["22:00"], as needed []. If the image is not a prescription or cannot be read, set readable false and medications []."""
+RX_UPLOAD_MAX = 10 * 1024 * 1024
+
+
+def _rx_upload_public(doc: dict) -> dict:
+    out = {k: v for k, v in doc.items() if k not in ("_id", "path", "user_id")}
+    out["image_url"] = f"/api/rx-uploads/{doc['upload_id']}/image"
+    return out
+
+
+def _clean_rx_meds(meds) -> list:
+    clean = []
+    for m in meds if isinstance(meds, list) else []:
+        if not isinstance(m, dict) or not str(m.get("name") or "").strip():
+            continue
+        times = [t for t in (m.get("times") or []) if isinstance(t, str) and re.fullmatch(r"\d{2}:\d{2}", t)]
+        qty = m.get("quantity")
+        clean.append({"name": str(m["name"]).strip()[:120], "dosage": str(m.get("dosage") or "").strip()[:120],
+                      "frequency": str(m.get("frequency") or "").strip()[:120], "times": times,
+                      "instructions": (str(m.get("instructions")).strip()[:300] if m.get("instructions") else None),
+                      "quantity": qty if isinstance(qty, int) and qty > 0 else None})
+    return clean[:20]
+
+
+@api.post("/rx-uploads")
+async def upload_prescription(file: UploadFile = File(...), profile_id: Optional[str] = Form(None),
+                              user=Depends(require_not_pharmacist)):
+    raw = await file.read(RX_UPLOAD_MAX + 1)
+    if len(raw) > RX_UPLOAD_MAX:
+        raise HTTPException(status_code=413, detail="Photos must be under 10 MB")
+    try:
+        jpeg = await asyncio.to_thread(_normalise_photo, raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Upload a photo of the prescription (JPG, PNG or WEBP)")
+    upload_id = f"rxu_{uuid.uuid4().hex[:12]}"
+    path = f"{STORAGE_APP}/rx-uploads/{user['user_id']}/{upload_id}.jpg"
+    stored = await asyncio.to_thread(put_object, path, jpeg, "image/jpeg")
+    try:
+        chat = LlmChat(api_key=LLM_KEY, session_id=f"rxread_{upload_id}",
+                       system_message=RX_READ_PROMPT).with_model("openai", "gpt-5.5")
+        reply = await chat.send_message(UserMessage(
+            text="Read this prescription and return the JSON.",
+            file_contents=[ImageContent(image_base64=base64.b64encode(jpeg).decode())]))
+        parsed = parse_llm_json(reply) or {"readable": False}
+    except Exception:
+        logging.getLogger(__name__).exception("Prescription reading failed for %s", upload_id)
+        parsed = {"readable": False, "error": "We couldn't read it automatically — add the medicines yourself."}
+    parsed["medications"] = _clean_rx_meds(parsed.get("medications"))
+    doc = {"upload_id": upload_id, "user_id": user["user_id"], "profile_id": profile_key(user, profile_id),
+           "path": stored.get("path", path), "status": "pending_review", "extracted": parsed,
+           "added_medication_ids": [], "is_deleted": False, "created_at": iso()}
+    await db.rx_uploads.insert_one(doc)
+    return _rx_upload_public(doc)
+
+
+@api.get("/rx-uploads")
+async def list_prescription_uploads(profile_id: Optional[str] = None, user=Depends(require_not_pharmacist)):
+    docs = await db.rx_uploads.find({"user_id": user["user_id"], "profile_id": profile_key(user, profile_id),
+                                     "is_deleted": False}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return [_rx_upload_public(d) for d in docs]
+
+
+async def _own_rx_upload(upload_id: str, user: dict) -> dict:
+    doc = await db.rx_uploads.find_one({"upload_id": upload_id, "user_id": user["user_id"], "is_deleted": False},
+                                       {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Prescription not found")
+    return doc
+
+
+@api.get("/rx-uploads/{upload_id}/image")
+async def get_prescription_upload_image(upload_id: str, user=Depends(require_not_pharmacist)):
+    doc = await _own_rx_upload(upload_id, user)
+    data, _ = await asyncio.to_thread(get_object, doc["path"])
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
+
+
+class RxConfirmMed(BaseModel):
+    name: str
+    dosage: str
+    times: List[str]
+    instructions: Optional[str] = None
+    quantity_dispensed: Optional[int] = None
+
+
+class RxConfirm(BaseModel):
+    medications: List[RxConfirmMed]
+
+
+@api.post("/rx-uploads/{upload_id}/confirm")
+async def confirm_prescription_upload(upload_id: str, body: RxConfirm, user=Depends(require_not_pharmacist)):
+    doc = await _own_rx_upload(upload_id, user)
+    meds = [m for m in body.medications if m.name.strip()]
+    if not meds:
+        raise HTTPException(status_code=400, detail="Pick at least one medicine to add")
+    for m in meds:
+        if not m.dosage.strip() or not m.times or not all(re.fullmatch(r"\d{2}:\d{2}", t) for t in m.times):
+            raise HTTPException(status_code=400, detail=f"Set a dose and at least one time for {m.name}")
+    added = []
+    for m in meds:
+        med = await add_medication(MedicationCreate(
+            name=m.name.strip(), dosage=m.dosage.strip(), times=m.times, instructions=m.instructions,
+            profile_id=doc["profile_id"],
+            quantity_dispensed=m.quantity_dispensed, dispensed_on=iso()), user)
+        await db.medications.update_one({"medication_id": med["medication_id"]},
+                                        {"$set": {"source": "prescription_upload", "rx_upload_id": upload_id}})
+        added.append(med["medication_id"])
+    await db.rx_uploads.update_one({"upload_id": upload_id}, {
+        "$set": {"status": "confirmed", "confirmed_at": iso()},
+        "$push": {"added_medication_ids": {"$each": added}}})
+    return {"added": len(added), "medication_ids": added}
+
+
+@api.delete("/rx-uploads/{upload_id}")
+async def delete_prescription_upload(upload_id: str, user=Depends(require_not_pharmacist)):
+    await _own_rx_upload(upload_id, user)
+    await db.rx_uploads.update_one({"upload_id": upload_id}, {"$set": {"is_deleted": True, "deleted_at": iso()}})
+    return {"ok": True}
+
+
 app.include_router(api)
 
 FEATURE_ROUTES = [

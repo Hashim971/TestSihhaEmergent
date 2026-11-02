@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import { toast } from "sonner";
 import {
   LayoutDashboard, MessageSquare, ScanLine, Pill, Users,
-  Stethoscope, Bell, LogOut, ChevronDown, Share2, Settings as SettingsIcon, CalendarDays, ShieldCheck, Building2, FileHeart, ShoppingBag, CalendarPlus, FileSignature,
+  Stethoscope, Bell, LogOut, ChevronDown, Share2, Settings as SettingsIcon, CalendarDays, ShieldCheck, Building2, FileHeart, ShoppingBag, CalendarPlus, FileSignature, Menu, X,
 } from "lucide-react";
 import { usePlatform } from "../context/PlatformContext";
 import { BrandMark } from "./BrandMark";
@@ -37,6 +37,7 @@ export default function Layout() {
   const [alerts, setAlerts] = useState([]);
   const [showAlerts, setShowAlerts] = useState(false);
   const [showProfiles, setShowProfiles] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const navigate = useNavigate();
   const { isOn, refreshFlags } = usePlatform();
 
@@ -82,6 +83,49 @@ export default function Layout() {
     toast.success(res.data.sharing_enabled ? "Now sharing data with doctors" : "Data sharing disabled");
   };
 
+  const navItems = (user.role === "doctor" ? doctorNav : patientNav)
+    .filter((n) => !n.flag || isOn(n.flag))
+    .filter((n) => n.to !== "/visits" || user.account_id);
+  const linkCls = ({ isActive }) =>
+    `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium ${isActive ? "bg-forest text-white" : "text-ink-soft hover:bg-sand"}`;
+  const sidebarBody = (mobile) => (
+    <>
+      <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto" onClick={mobile ? () => setNavOpen(false) : undefined}>
+        {navItems.map(({ to, label, icon: Icon, testid }) => (
+          <NavLink key={to} to={to} end={to === "/doctor"} data-testid={mobile ? `m-${testid}` : testid} className={linkCls}>
+            <Icon className="h-4 w-4" /> {label}
+          </NavLink>
+        ))}
+        {user.account_role === "account_admin" && (
+          <NavLink to="/my-hospital" data-testid={mobile ? "m-nav-my-hospital" : "nav-my-hospital"} className={linkCls}>
+            <Building2 className="h-4 w-4" /> My Hospital
+          </NavLink>
+        )}
+        {user.is_admin && (
+          <NavLink to="/admin/accounts" data-testid={mobile ? "m-nav-super-admin" : "nav-super-admin"}
+            className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-ink-soft hover:bg-sand">
+            <ShieldCheck className="h-4 w-4" /> Super Admin
+          </NavLink>
+        )}
+      </nav>
+      <div className="p-4 border-t border-line space-y-2">
+        {user.is_admin && (
+          <button onClick={toggleRole} data-testid={mobile ? "m-toggle-role-btn" : "toggle-role-btn"} className="btn-outline w-full justify-center text-xs">
+            <Stethoscope className="h-3.5 w-3.5" />
+            {user.role === "doctor" ? "Switch to Patient" : "Switch to Doctor"}
+          </button>
+        )}
+        {user.role !== "doctor" && (
+          <button onClick={toggleSharing} data-testid={mobile ? "m-toggle-sharing-btn" : "toggle-sharing-btn"}
+            className={`btn-outline w-full justify-center text-xs ${user.sharing_enabled ? "!bg-sage/30 !border-sage" : ""}`}>
+            <Share2 className="h-3.5 w-3.5" />
+            {user.sharing_enabled ? "Sharing: ON" : "Share with Doctors"}
+          </button>
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div className="min-h-screen bg-sand flex">
       {/* Sidebar */}
@@ -89,78 +133,49 @@ export default function Layout() {
         <div className="px-6 py-6 flex items-center gap-2 border-b border-line">
           <BrandMark testid="sidebar-brand" />
         </div>
-        <nav className="flex-1 px-3 py-6 space-y-1">
-          {(user.role === "doctor" ? doctorNav : patientNav).filter((n) => !n.flag || isOn(n.flag)).map(({ to, label, icon: Icon, testid }) => (
-            <NavLink
-              key={to} to={to} end={to === "/doctor"} data-testid={testid}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium ${
-                  isActive ? "bg-forest text-white" : "text-ink-soft hover:bg-sand"
-                }`
-              }
-            >
-              <Icon className="h-4 w-4" /> {label}
-            </NavLink>
-          ))}
-          {user.account_role === "account_admin" && (
-            <NavLink
-              to="/my-hospital" data-testid="nav-my-hospital"
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium ${
-                  isActive ? "bg-forest text-white" : "text-ink-soft hover:bg-sand"
-                }`
-              }
-            >
-              <Building2 className="h-4 w-4" /> My Hospital
-            </NavLink>
-          )}
-          {user.is_admin && (
-            <NavLink
-              to="/admin/accounts" data-testid="nav-super-admin"
-              className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-ink-soft hover:bg-sand"
-            >
-              <ShieldCheck className="h-4 w-4" /> Super Admin
-            </NavLink>
-          )}
-        </nav>
-        <div className="p-4 border-t border-line space-y-2">
-          {user.is_admin && (
-            <button onClick={toggleRole} data-testid="toggle-role-btn" className="btn-outline w-full justify-center text-xs">
-              <Stethoscope className="h-3.5 w-3.5" />
-              {user.role === "doctor" ? "Switch to Patient" : "Switch to Doctor"}
-            </button>
-          )}
-          {user.role !== "doctor" && (
-            <button onClick={toggleSharing} data-testid="toggle-sharing-btn"
-              className={`btn-outline w-full justify-center text-xs ${user.sharing_enabled ? "!bg-sage/30 !border-sage" : ""}`}>
-              <Share2 className="h-3.5 w-3.5" />
-              {user.sharing_enabled ? "Sharing: ON" : "Share with Doctors"}
-            </button>
-          )}
-        </div>
+        {sidebarBody(false)}
       </aside>
 
+      {navOpen && (
+        <div className="fixed inset-x-0 bottom-0 z-40 md:hidden" style={{ top: "var(--env-bar, 0px)" }} data-testid="mobile-nav-drawer">
+          <button className="absolute inset-0 bg-ink/40" onClick={() => setNavOpen(false)} aria-label="Close menu" data-testid="mobile-nav-backdrop" />
+          <aside className="absolute top-0 bottom-0 start-0 w-72 max-w-[85vw] bg-white flex flex-col shadow-xl fade-up">
+            <div className="px-5 py-4 flex items-center justify-between border-b border-line">
+              <BrandMark testid="mobile-nav-brand" />
+              <button onClick={() => setNavOpen(false)} className="p-2 rounded-full hover:bg-sand" data-testid="mobile-nav-close-btn" aria-label="Close menu">
+                <X className="h-5 w-5 text-ink-soft" />
+              </button>
+            </div>
+            {sidebarBody(true)}
+          </aside>
+        </div>
+      )}
+
       {/* Main */}
-      <div className="flex-1 md:ml-60 flex flex-col min-h-screen">
-        <header className="sticky z-10 bg-white/90 backdrop-blur-md border-b border-line px-6 py-3 flex items-center justify-between" style={{ top: "var(--env-bar, 0px)" }}>
+      <div className="flex-1 min-w-0 md:ml-60 flex flex-col min-h-screen">
+        <header className="sticky z-10 bg-white/90 backdrop-blur-md border-b border-line px-3 sm:px-6 py-3 flex items-center justify-between gap-2" style={{ top: "var(--env-bar, 0px)" }}>
+          <div className="flex items-center gap-1 sm:gap-2 min-w-0">
+          <button onClick={() => setNavOpen(true)} className="md:hidden p-2 -ms-1 rounded-full hover:bg-sand shrink-0" data-testid="mobile-nav-open-btn" aria-label="Open menu">
+            <Menu className="h-5 w-5 text-ink" />
+          </button>
           {/* Profile switcher — dependents are a patient concept */}
           {user.role === "doctor" ? (
-            <p className="text-sm font-medium text-ink-soft" data-testid="doctor-context-label">
+            <p className="text-sm font-medium text-ink-soft truncate" data-testid="doctor-context-label">
               Clinician workspace{user.is_admin ? " · Admin" : ""}
             </p>
           ) : (
-          <div className="relative">
+          <div className="relative min-w-0">
             <button
               onClick={() => setShowProfiles(!showProfiles)}
               data-testid="profile-switcher-btn"
-              className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-line bg-white text-sm font-medium hover:bg-sand"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-line bg-white text-sm font-medium hover:bg-sand max-w-full"
               style={{ transition: "background-color 0.2s ease" }}
             >
-              <span className="h-6 w-6 rounded-full bg-sage text-forest flex items-center justify-center text-xs font-bold">
+              <span className="h-6 w-6 shrink-0 rounded-full bg-sage text-forest flex items-center justify-center text-xs font-bold">
                 {activeProfile.name.charAt(0).toUpperCase()}
               </span>
-              {activeProfile.name}
-              <ChevronDown className="h-3.5 w-3.5 text-ink-soft" />
+              <span className="truncate">{activeProfile.name}</span>
+              <ChevronDown className="h-3.5 w-3.5 text-ink-soft shrink-0" />
             </button>
             {showProfiles && (
               <div className="absolute mt-2 w-56 bg-white border border-line rounded-xl shadow-md p-1.5 z-30">
@@ -185,8 +200,9 @@ export default function Layout() {
             )}
           </div>
           )}
+          </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1 sm:gap-3 shrink-0">
             <LanguageToggle />
             {/* Alerts */}
             <div className="relative">
@@ -237,7 +253,7 @@ export default function Layout() {
           </div>
         </header>
 
-        <main className="flex-1 p-6 md:p-8">
+        <main className="flex-1 min-w-0 p-4 sm:p-6 md:p-8">
           <Outlet />
         </main>
       </div>

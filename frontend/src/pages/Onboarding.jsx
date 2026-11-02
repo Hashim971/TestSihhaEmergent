@@ -62,7 +62,7 @@ export default function Onboarding() {
   };
 
   return (
-    <div className="min-h-screen bg-sand py-10 px-6" data-testid="onboarding-page">
+    <div className="min-h-screen bg-sand py-8 sm:py-10 px-4 sm:px-6" data-testid="onboarding-page">
       <div className="max-w-3xl mx-auto">
         <div className="flex items-center justify-center gap-2 mb-10">
           <BrandMark testid="onboarding-brand" />
@@ -81,13 +81,13 @@ export default function Onboarding() {
                 <span className="text-[10px] uppercase tracking-wider text-ink-soft mt-2 hidden sm:block">{label}</span>
               </div>
               {i < STEPS.length - 1 && (
-                <div className={`h-0.5 w-10 sm:w-16 mx-1 sm:-mt-5 ${i < step ? "bg-forest" : "bg-line"}`} />
+                <div className={`h-0.5 w-6 sm:w-16 mx-1 sm:-mt-5 ${i < step ? "bg-forest" : "bg-line"}`} />
               )}
             </React.Fragment>
           ))}
         </div>
 
-        <div className="card p-8 md:p-10 fade-up" key={step}>
+        <div className="card p-5 sm:p-8 md:p-10 fade-up" key={step}>
           {step === 1 && (
             <StepCard
               title="General Information"
@@ -98,7 +98,7 @@ export default function Onboarding() {
                   <label className="text-sm font-medium">Height</label>
                   <div className="mt-1 flex">
                     <input type="number" step="any" value={form.height} onChange={(e) => set("height", e.target.value)}
-                      data-testid="onboarding-input-height" placeholder="179"
+                      data-testid="onboarding-input-height" placeholder="Your height" autoComplete="off"
                       className="flex-1 border border-line rounded-l-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest" />
                     <select value={form.height_unit} onChange={(e) => set("height_unit", e.target.value)}
                       data-testid="onboarding-select-height-unit"
@@ -112,7 +112,7 @@ export default function Onboarding() {
                   <label className="text-sm font-medium">Weight</label>
                   <div className="mt-1 flex">
                     <input type="number" step="any" value={form.weight} onChange={(e) => set("weight", e.target.value)}
-                      data-testid="onboarding-input-weight" placeholder="80"
+                      data-testid="onboarding-input-weight" placeholder="Your weight" autoComplete="off"
                       className="flex-1 border border-line rounded-l-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest" />
                     <select value={form.weight_unit} onChange={(e) => set("weight_unit", e.target.value)}
                       data-testid="onboarding-select-weight-unit"
@@ -132,7 +132,7 @@ export default function Onboarding() {
                       className="flex-1 border border-line rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest" />
                   ) : (
                     <input type="text" value={form.date_of_birth} onChange={(e) => set("date_of_birth", e.target.value)}
-                      data-testid="onboarding-input-dob-hijri" placeholder="e.g. 1419-05-12 AH"
+                      data-testid="onboarding-input-dob-hijri" placeholder="YYYY-MM-DD (Hijri)" autoComplete="off"
                       className="flex-1 border border-line rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest" />
                   )}
                   <div className="flex items-center gap-4">
