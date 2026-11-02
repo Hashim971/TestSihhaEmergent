@@ -98,7 +98,7 @@ export default function Accounts() {
               <TypeBadge type={a.type} />
               <span className="text-xs text-ink-soft">{a.staff_count} Staff · {a.customer_count} Customers{a.city ? ` · ${a.city}` : ""}</span>
             </div>
-            <div className="flex items-center gap-3 shrink-0">
+            <div className="flex flex-wrap items-center gap-3 shrink-0 [&>*]:whitespace-nowrap">
               <button onClick={() => open(a, "branding")} data-testid={`account-edit-${a.account_id}`} className="p-2 border border-line rounded-md hover:bg-sand" title="Edit"><Pencil className="h-4 w-4" /></button>
               <IdChip id={a.account_id} testid={`account-id-${a.account_id}`} large />
               <button onClick={() => open(a)} data-testid={`account-switch-${a.account_id}`} className="inline-flex items-center gap-1 text-sm font-medium text-ink hover:text-forest">

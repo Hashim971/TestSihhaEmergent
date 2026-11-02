@@ -395,3 +395,17 @@ Answers "does this screening need a visit, and how does it get booked?" plus e-p
 - Landing: white-label wording fixed + WhiteLabelCallout section with "Talk to us" → #demo.
 - Health chat photos: POST /api/chat/sessions/{sid}/photos (keep=true → object storage + chat_photos; keep=false → in-memory 15-min, single use), message {text, photo_id} sends ImageContent to GPT-5.5; GET /api/chat/photos/{id} (owner or doctor with access); report.photo_ids, doctor report thumbnails. Note: discard cache is in-process (single worker).
 - Tests: iteration_23.
+
+
+## Jun 2026 — Mobile overhaul + medication capture
+- Mobile: patient/doctor shell has a hamburger drawer (Layout.jsx); admin has a scrollable mobile tab bar; landing header fixed; .card/.btn-* moved to @layer components so Tailwind utilities (hidden, padding) override them; tighter mobile padding.
+- Onboarding: removed numeric dummy placeholders (179/80) that looked like prefilled data.
+- Dashboard: removed "Sync Wearable (demo)" button (backend /vitals/simulate kept only for seed scripts).
+- Prescription upload (Medications + Prescriptions pages): photo stored in Emergent Object Storage (rx_uploads collection), GPT-5.5 vision reads medicines, patient edits/confirms → medications (source=prescription_upload). Endpoints /api/rx-uploads (POST, GET, GET image owner-only, POST confirm (409 if already confirmed), DELETE soft).
+- Pill ID: "Add to my medications" opens a form (editable name, dose, multiple times) then Add.
+- Visit Summaries hidden (nav + route) for patients without account_id (B2C).
+- Tested: iteration_24 (backend 11/11, frontend all flows pass).
+
+## Backlog
+- P2: Pharmacy ad console payment provider (deferred by user).
+- P2: Pill ID — prefer vision model when packaging text is readable (CNN can misidentify).

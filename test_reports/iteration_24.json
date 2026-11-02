@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 24 tested backend and frontend: mobile overhaul, prescription photo upload, Pill ID 'Add to medications', removal of the dummy onboarding values and wearable demo, and Visit Summaries gating. Backend: 11/11 pytest cases pass (tests/test_iter24_rx_uploads.py). They cover AI reading of a PIL-generated prescription (it returned Metformin 500 mg at 08:00/20:00 and Atorvastatin 20 mg at 22:00), the list, the owner-only image (404 for another patient, 401 without login), confirm validation (400 for empty dose, empty times, a bad time format or no medicines), confirm writing medications with source=prescription_upload, a 400 for a non-image file, and soft delete. Frontend at 390x844: there is no horizontal overflow on any of the 34 routes requested (public, patient, doctor, pharmacist and admin). The hamburger drawer opens, navigates and closes on link tap, backdrop and close button for both patient and doctor. The landing header shows only the language toggle and Sign in. The admin mobile tab bar renders. At 1920x800 the sidebar shows and the hamburger and admin mobile tabs are hidden. Prescription upload end-to-end on mobile: review panel, edit, uncheck, add row, confirm, then medications-list, today-schedule and thumbnails (with 'N added') update, and delete works. The same card appears on /prescriptions. Pill ID: the empty-dose toast fires, times can be added and removed, the Add confirmation shows, and the medicine appears on /medications with the chosen dose and times (08:00, 21:30). Onboarding for a new account shows empty height/weight with the placeholders and no prefilled inputs. The simulate-wearable button is gone and Log Vitals saves and updates the card. Solo has no nav-visits or m-nav-visits and /visits redirects to /dashboard; Omar sees Visit Summaries and the page renders bilingual summaries.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/rx-uploads/{id}/confirm", "issue": "No status guard. Confirming an upload that is already 'confirmed' returns 200 and adds duplicate medications (verified: re-confirm added TEST_Dup). Consider returning 409 or making it idempotent per medicine."},
+      {"endpoint": "DELETE /api/rx-uploads/{id}", "issue": "Soft-deleting the photo leaves the medications added from it active. This may be intended, but the UI does not tell the user."},
+      {"endpoint": "POST /api/pills/identify", "issue": "Possibly pre-existing safety concern. A synthetic red box clearly labelled 'Panadol Paracetamol 500 mg' was identified by the CNN model as 'Algoflex (Ibuprofen)'. Because users can now add the Pill ID result straight to their medications, a confident misidentification can put the wrong drug on the schedule. Consider preferring the vision model when the packaging has readable text, or showing the confidence and asking the user to confirm the name before adding."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin mobile header", "issues": ["The header still shows 'Accounts' and 'Switches' text links next to the new scrollable admin-mobile-tabs, which duplicates navigation in a cramped header."]},
+      {"screen": "Admin accounts (mobile)", "issues": ["The account ID chip (ACC-12AFFE) wraps onto two lines inside its pill."]},
+      {"screen": "Onboarding DOB", "issues": ["Uses the browser's native date input (mm/dd/yyyy) instead of the shadcn calendar."]},
+      {"screen": "PrescriptionUpload thumbnails", "issues": ["Delete has no confirmation step and no error handling (no try/catch around api.delete)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter24_rx_uploads.py", "/app/test_reports/pytest/iter24.xml"],
+  "action_items": [
+    "Guard POST /api/rx-uploads/{id}/confirm against re-confirming (409, or skip medicines already added) to avoid duplicate medications.",
+    "Consider a name/confidence confirmation step in Pill ID before adding to medications (the CNN misidentified a labelled Panadol box as Algoflex/ibuprofen).",
+    "Optional: remove the duplicate Accounts/Switches header links on admin mobile, add a confirm step and try/catch to rx thumbnail delete, and use the shadcn calendar for onboarding DOB."
+  ],
+  "critical_code_review_comments": [
+    "server.py confirm_prescription_upload: no check on doc['status'], so it can be called repeatedly and add duplicates.",
+    "Visit Summaries gating is frontend-only (Layout filter plus a Navigate in VisitSummaries.jsx). The backend visits endpoint still serves solo users. This is acceptable since it is their own data, but note it if hospital-only enforcement is a requirement.",
+    "PrescriptionUpload RxThumb.remove has no try/catch; a failed delete would raise an unhandled promise rejection with no toast.",
+    "server.py is ~5800 lines (monolith required by the user, so not flagged for splitting)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter24_rx_uploads.py"],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "100% of requested flows passed; 4 minor design notes"},
+  "seed_data_creation": "Created a temporary patient test_iter24_53006@example.com and TEST_ medicines and rx uploads on solo.patient. All were cleaned up: solo has 0 active medicines and 0 uploads, and the test user, its vitals and its medicines were deleted from Mongo. Omar was not modified.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use test_iter24_rx_uploads.py for the rx-uploads regression; it generates a prescription image with PIL using load_default because DejaVu fonts are missing, and the AI still reads it. Network on preview is slow: after confirm or save actions, wait 5s or more before asserting list updates, because 2.5s waits gave false negatives. Pill ID test image: a PIL-drawn red box with 'Panadol' text is identified as Algoflex by the CNN in about 20s. Login with page.request.post('/api/auth/login') works for all roles in Playwright."
+}

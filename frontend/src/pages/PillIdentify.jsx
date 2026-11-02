@@ -141,17 +141,19 @@ function AddToMedications({ result }) {
   const [added, setAdded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
+  const [name, setName] = useState(result.name || "");
   const [dose, setDose] = useState("");
   const [times, setTimes] = useState(["08:00"]);
 
   const add = async () => {
     const slots = times.filter((t) => /^\d{2}:\d{2}$/.test(t));
+    if (!name.trim()) return toast.error("Enter the medicine name");
     if (!dose.trim()) return toast.error("Enter the dose you take");
     if (slots.length === 0) return toast.error("Pick a time of day first");
     setSaving(true);
     try {
       await api.post("/medications", {
-        name: result.name,
+        name: name.trim(),
         dosage: dose.trim(),
         times: [...new Set(slots)].sort(),
         instructions: "Added from Pill ID — confirm the dose with your pharmacist.",
@@ -159,7 +161,7 @@ function AddToMedications({ result }) {
         profile_id: activeProfile.id,
       });
       setAdded(true);
-      toast.success(`${result.name} added to your medication schedule`);
+      toast.success(`${name.trim()} added to your medication schedule`);
     } catch {
       toast.error("Could not add that medicine");
     } finally {
@@ -185,6 +187,11 @@ function AddToMedications({ result }) {
 
   return (
     <div className="border border-line rounded-xl p-4 space-y-3" data-testid="add-pill-to-meds">
+      <div>
+        <label className="text-xs uppercase tracking-[0.15em] text-ink-soft">Medicine name — check it matches your pack</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} data-testid="pill-med-name-input"
+          className="mt-1 w-full border border-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest" />
+      </div>
       <div>
         <label className="text-xs uppercase tracking-[0.15em] text-ink-soft">Dose</label>
         <input value={dose} onChange={(e) => setDose(e.target.value)} placeholder="e.g. 1 tablet · 500 mg"

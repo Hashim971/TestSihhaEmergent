@@ -1988,5 +1988,8 @@
 "Close menu": "إغلاق القائمة",
 "We couldn't find medicines on it — add them below.": "لم نجد أدوية فيها — أضفها أدناه.",
 "Could not upload that prescription": "تعذّر رفع هذه الوصفة",
-"Could not add those medicines": "تعذّرت إضافة هذه الأدوية"
+"Could not add those medicines": "تعذّرت إضافة هذه الأدوية",
+"Medicine name — check it matches your pack": "اسم الدواء — تأكد أنه يطابق العلبة",
+"Enter the medicine name": "أدخل اسم الدواء",
+"Could not remove that photo": "تعذّر حذف الصورة"
 }

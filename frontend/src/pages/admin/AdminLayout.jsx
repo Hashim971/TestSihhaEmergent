@@ -77,8 +77,6 @@ export default function AdminLayout() {
           <ShieldCheck className="h-5 w-5 text-forest" />
           <span className="font-semibold text-sm flex-1">Super Admin</span>
           <button onClick={() => setQuick(true)} data-testid="quick-nav-btn-mobile" className="p-2 rounded-full hover:bg-sand"><Search className="h-4 w-4" /></button>
-          <NavLink to="/admin/accounts" className="text-xs font-medium text-forest" data-testid="admin-nav-accounts-mobile">Accounts</NavLink>
-          <NavLink to="/admin/flags" className="text-xs font-medium text-forest" data-testid="admin-nav-flags-mobile">Switches</NavLink>
           <button onClick={logout} data-testid="admin-logout-btn-mobile" className="p-2 rounded-full hover:bg-sand" aria-label="Sign out"><LogOut className="h-4 w-4 text-ink-soft" /></button>
         </header>
         <nav className="md:hidden flex gap-1 overflow-x-auto whitespace-nowrap bg-white border-b border-line px-3 py-2" data-testid="admin-mobile-tabs">

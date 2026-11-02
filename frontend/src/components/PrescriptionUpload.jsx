@@ -70,9 +70,14 @@ function RxThumb({ upload, onReview, onDeleted }) {
     return () => url && URL.revokeObjectURL(url);
   }, [upload.upload_id]);
   const remove = async () => {
-    await api.delete(`/rx-uploads/${upload.upload_id}`);
-    toast.success("Prescription photo removed");
-    onDeleted();
+    if (!window.confirm("Remove this prescription photo? Medicines you already added stay on your schedule.")) return;
+    try {
+      await api.delete(`/rx-uploads/${upload.upload_id}`);
+      toast.success("Prescription photo removed");
+      onDeleted();
+    } catch {
+      toast.error("Could not remove that photo");
+    }
   };
   const pending = upload.status === "pending_review";
   return (

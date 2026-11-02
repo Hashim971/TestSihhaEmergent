@@ -5709,6 +5709,8 @@ class RxConfirm(BaseModel):
 @api.post("/rx-uploads/{upload_id}/confirm")
 async def confirm_prescription_upload(upload_id: str, body: RxConfirm, user=Depends(require_not_pharmacist)):
     doc = await _own_rx_upload(upload_id, user)
+    if doc["status"] == "confirmed":
+        raise HTTPException(status_code=409, detail="These medicines were already added")
     meds = [m for m in body.medications if m.name.strip()]
     if not meds:
         raise HTTPException(status_code=400, detail="Pick at least one medicine to add")
