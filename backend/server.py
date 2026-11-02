@@ -5714,7 +5714,7 @@ async def update_getting_started(body: GettingStartedUpdate, user=Depends(requir
 # ---------- Product analytics (heatmaps, funnels, journeys, frustration, replays) ----------
 ANALYTICS_RETENTION_DAYS = 30
 ANALYTICS_TYPES = {"pageview", "click", "leave", "rage", "dead"}
-_ID_SEGMENT = re.compile(r"^(?=.*\d)[A-Za-z0-9_-]{6,}$")
+_ID_SEGMENT = re.compile(r"^([A-Za-z]+_[A-Za-z0-9]{6,}|[0-9a-fA-F-]{12,}|\d+|[A-Z]{2,5}-[A-Z0-9]{4,})$")
 
 
 def _norm_path(path: str) -> str:
@@ -5749,6 +5749,9 @@ def _ts_range(docs: list, replay: list):
 @api.post("/analytics/collect")
 async def analytics_collect(body: AnalyticsBatch, user=Depends(get_current_user)):
     if user.get("is_admin") or not re.fullmatch(r"[A-Za-z0-9_-]{8,60}", body.session_id):
+        return {"ok": True}
+    owner = await db.analytics_sessions.find_one({"session_id": body.session_id}, {"_id": 0, "user_id": 1})
+    if owner and owner["user_id"] != user["user_id"]:
         return {"ok": True}
     now = now_utc()
     meta = {"session_id": body.session_id, "user_id": user["user_id"], "role": user.get("role"),
@@ -5837,12 +5840,15 @@ async def analytics_heatmap(path: str, device: str = "desktop", days: int = 7, r
         {"$match": {**m, "type": "click", "target": {"$ne": None}}},
         {"$group": {"_id": "$target", "n": {"$sum": 1}}}, {"$sort": {"n": -1}}, {"$limit": 15}]).to_list(15)
     recorded = await db.analytics_sessions.distinct("session_id", {"has_replay": True, "pages": m["path"], "device": device})
-    snapshot = await db.analytics_events.find_one({**m, "type": "pageview", "session_id": {"$in": recorded}},
-                                                  {"_id": 0, "session_id": 1, "t": 1, "vw": 1}, sort=[("at", -1)])
-    if snapshot:
-        leave = await db.analytics_events.find_one({"session_id": snapshot["session_id"], "type": "leave", "path": m["path"],
-                                                    "t": {"$gte": snapshot["t"]}}, {"_id": 0, "t": 1}, sort=[("t", 1)])
-        snapshot["until"] = leave["t"] if leave else None
+    stay = await db.analytics_events.find_one({**m, "type": "leave", "session_id": {"$in": recorded}, "duration": {"$gte": 2500}},
+                                              {"_id": 0, "session_id": 1, "t": 1, "vw": 1, "duration": 1}, sort=[("t", -1)])
+    if stay:
+        snapshot = {"session_id": stay["session_id"], "t": stay["t"] - stay["duration"], "until": stay["t"], "vw": stay.get("vw")}
+    else:
+        snapshot = await db.analytics_events.find_one({**m, "type": "pageview", "session_id": {"$in": recorded}},
+                                                      {"_id": 0, "session_id": 1, "t": 1, "vw": 1}, sort=[("t", -1)])
+        if snapshot:
+            snapshot["until"] = None
     return {"path": m["path"], "device": device, "points": points,
             "top_targets": [{"target": t["_id"], "clicks": t["n"]} for t in targets], "snapshot": snapshot}
 

@@ -15,9 +15,10 @@ const TABS = [["overview", "Overview"], ["heatmaps", "Heatmaps"], ["funnel", "Si
 export default function Analytics() {
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") || "overview";
-  const [filters, setFilters] = useState({ days: 7, role: "", include_demo: false });
+  const filters = { days: +(params.get("days") || 7), role: params.get("role") || "", include_demo: params.get("demo") === "1" };
+  const setFilters = (f) => setParams({ ...Object.fromEntries(params), days: f.days, role: f.role, demo: f.include_demo ? "1" : "0" });
   const [replay, setReplay] = useState(null);
-  const go = (t, extra = {}) => setParams({ tab: t, ...extra });
+  const go = (t, extra = {}) => setParams({ days: filters.days, role: filters.role, demo: filters.include_demo ? "1" : "0", tab: t, ...extra });
   const props = { filters, onWatch: (sessionId, t) => setReplay({ sessionId, t }), go, params };
 
   return (

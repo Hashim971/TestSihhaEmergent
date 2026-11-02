@@ -1,0 +1,55 @@
+{
+  "summary": "Tested product analytics (tracker, /api/analytics/collect, all /api/admin/analytics/* endpoints, admin /admin/analytics UI: all 6 tabs, filters, heatmap desktop/mobile, frustration Watch, replay modal), patient guidance (Start-here checklist, guided tour, dismiss, persistence) with 2 NEW registered patients (desktop + 390x844 mobile), and chat screening progress through a full live AI screening. Backend: 18/18 pytest pass. Frontend: all requested flows work. Main problem: no 'leave' event when the page unloads (reload, closing the tab, typing a URL). Because of that the exit page of every visit gets no time-on-page, and the heatmap background can show the wrong or a blank page.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/analytics/heatmap (snapshot)", "issue": "The snapshot pageview is picked with sort=[('at',-1)]. 'at' is the server time the batch arrived, so it is the same for every event in a batch and it can pick a pageview the user was only on for a moment (e.g. the instant /dashboard -> /onboarding redirect after register). When there is no leave event, until=None and the replay is paused at t+8s, which can already be the next page after a hard navigation. Seen: the desktop /dashboard heatmap background showed the /chat page (Health Chat nav active) with an empty main area (snapshot until=None), and the mobile /dashboard background was blank under the staging banner. My guess for the mobile case is that it picked the instant pre-redirect /dashboard pageview; I could not confirm this in the DB because my direct Mongo query failed with an auth error. Fix: sort by t, and prefer a pageview that has a leave event with duration >= 2-3s, then pause near until-300."},
+      {"endpoint": "POST /api/analytics/collect", "issue": "Nothing checks that a session belongs to the user. Any signed-in user who posts with someone else's session_id adds events and replay chunks to that session ($setOnInsert keeps the original user_id), so a replay can be poisoned or mixed. Fix: if analytics_sessions already has this session_id with a different user_id, ignore the batch or reject it."},
+      {"endpoint": "_norm_path / normPath", "issue": "Any path segment of 6+ characters that contains a digit becomes ':id'. For example '/test27-04c8' was stored as '/:id'. That is fine for the current routes but fragile: a real slug such as 'covid19' or 'step2guide' would be merged into ':id'."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "lib/analytics.js tracker", "issue": "A 'leave' event is only sent on SPA route changes or stopAnalytics, not on pagehide / visibility hidden / reload. So the last page of every visit has no duration: the overview shows /chat avg time '—' even though it had 3 views. Journeys exits are still recorded, but heatmap snapshots without a leave event pause on the wrong page. Fix: in onHide/pagehide push a 'leave' with the duration before flush(true), and reset since when the tab becomes visible again.", "selector": "[data-testid='an-pages-table']", "priority": "MEDIUM"},
+      {"component": "Privacy masking (rrweb)", "issue": "maskTextSelector is 'main, [data-private]'. Content shown through portals (ConfirmDialog, components/admin/ui modals, toasts, the GuidedTour tooltip) is rendered under document.body, outside <main>, so its text is recorded unmasked. For example, a confirm dialog that names a medicine would appear in plain text. The sidebar and header (user's name) are also unmasked. Consider adding data-private to portal roots or masking '[role=dialog], .toast'.", "selector": "ConfirmDialog / portals", "priority": "MEDIUM"},
+      {"component": "Dead-click detection", "issue": "Every tap on a non-interactive element counts as dead, including each tap of a rage burst (3 taps = 1 rage + 3 or 4 dead). The target is the nearest data-testid ancestor, so a tap on the card heading is reported as the whole card ('getting-started'). This makes the frustration lists noisy and coarse.", "selector": "[data-testid^='an-frustration-row-']", "priority": "LOW"},
+      {"component": "ScreeningSteps", "issue": "The 'Summary' step (index 4) is never 'active': it jumps straight from 'Other details' active to all done. This is cosmetic; you could make it active when the assistant reply count reaches the soft limit.", "selector": "[data-testid='screening-step-4']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Mobile /chat reached from a Start-here step", "issues": ["The scroll position carries over from the dashboard: the page opens part-way down and the 'New Screening' button is out of view. Scroll to the top on route change."]},
+      {"screen": "Onboarding General step", "issues": ["Date of birth uses the browser's native date picker (mm/dd/yyyy) instead of the shadcn calendar. This was there before."]},
+      {"screen": "Admin analytics filters", "issues": ["Period, Who and Include-demo are kept in React state, not in the URL, so a reload or a shared link resets them. Only tab and path are in the URL."]}
+    ]
+  },
+  "passed_flows": [
+    "Register new patient -> onboarding -> skip -> /dashboard shows Start here with 4 steps, 0 of 4 done; guided tour highlights chat -> medications -> pill_id -> find_care, Next/Got it; tour_done saved (not shown after reload); desktop + mobile 390x844 placement correct",
+    "Opening /find-care ticks find_care (1 of 4); a chat message ticks chat (2 of 4); dismiss hides the card and it stays hidden after reload",
+    "Live AI screening: steps go active 0 -> 1 -> 2 -> 3 (symptom -> timing -> severity -> details), the AI followed the topic order, finished after 6 questions with 'Tap **Download Report**'; all 5 steps done; bold renders as <strong>, no raw **",
+    "Tracker batches pageview/leave/click(target=data-testid)/rage/dead with vw; replay chunks sent; super admin made 0 collect requests and the backend ignores admin posts",
+    "Admin analytics: the empty state hides demo accounts by default; with Include demo on, stats and pages table render; heatmap link -> ?tab=heatmaps&path=/dashboard with the select set; desktop/mobile toggle, tap count, Most tapped list, rrweb iframe rendered",
+    "Funnel shows 6 steps with % and drop-offs, a stuck count, and the B2C toggle changes the total; Journeys transitions/entries/exits; Frustration rows + Watch opens the replay at that moment; Replays list + frustrated filter + Watch -> rrweb-player plays with text masked; close works"
+  ],
+  "test_report_links": ["/app/backend/tests/test_iter27_analytics_getting_started.py", "/app/test_reports/pytest/pytest_iter27.xml"],
+  "action_items": [
+    "Send a 'leave' event (with duration) on visibilitychange hidden / pagehide in lib/analytics.js so exit pages get time-on-page and heatmap snapshots have an 'until'",
+    "Heatmap snapshot: sort the pageview by t, not at; prefer pageviews with a leave event and dwell >= 2-3s; pause near until",
+    "Mask text in portals (dialogs/toasts/modals) in rrweb recordings (data-private on portal roots or extend maskTextSelector)",
+    "Check session ownership in /api/analytics/collect (reject or ignore a session_id owned by another user)",
+    "Optional: don't count the taps of a rage burst as dead clicks; make the Summary screening step active near the end; scroll to top on route change"
+  ],
+  "critical_code_review_comments": [
+    "analytics_collect: the session_id is not bound to the user, which lets a replay be poisoned (see backend minor issue)",
+    "heatmap: the 'recorded' distinct query has no date or demo filter. That's harmless, but on a large collection it scans every session with has_replay",
+    "funnel: chat_messages.distinct with $in over every chat session id (up to 100k) will be slow as data grows; an aggregation keyed on user_id would be better",
+    "summary pages are limited to 40 and frustration to 50 rows, so a rarely visited page won't appear in the heatmap page select",
+    "Backend log shows an earlier startup NameError: ANALYTICS_RETENTION_DAYS was used in startup indexes before it was defined. It has been resolved and the backend is running now."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter27_analytics_getting_started.py"],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "~90% (all requested flows work; heatmap snapshot accuracy and missing unload leave event)"},
+  "test_credentials": "admin@sihha.ai / Admin@123 (/auth/clinician). New test patients (demo, @example.com): test_iter27ui_45713a@example.com / Passw0rd!x (chat + find_care done, checklist dismissed, tour done), test_iter27mob_9fddfc@example.com / Passw0rd!x (tour skipped)",
+  "seed_data_creation": "Pytest registers test_iter27_*@example.com patients and posts analytics events for path /testpage-<random> plus session as_test27*. These are demo accounts, so they're hidden unless Include demo is on, and the TTL removes them after 30 days.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use include_demo=true or the toggle because every test user is demo. Paths with digits normalize to ':id', so use letter-only test paths. Don't use networkidle. The AI chat takes about 6 turns to complete (~10-20s each). Re-check the heatmap snapshot on /dashboard desktop+mobile after the leave-on-unload and snapshot-selection fixes."
+}

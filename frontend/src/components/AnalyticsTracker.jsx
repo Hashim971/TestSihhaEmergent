@@ -16,6 +16,6 @@ export function AnalyticsTracker() {
     // eslint-disable-next-line
   }, [uid]);
 
-  useEffect(() => { trackPage(pathname); }, [pathname]);
+  useEffect(() => { trackPage(pathname); window.scrollTo(0, 0); }, [pathname]);
   return null;
 }

@@ -8,6 +8,7 @@ export function screeningStepIndex(messages, completed) {
   const replies = messages.filter((m) => m.role === "assistant" && !m.streaming);
   const last = replies[replies.length - 1]?.content || "";
   if (completed || replies.length > 6 || DONE_MARKERS.some((k) => last.includes(k))) return STEPS.length;
+  if (replies.length >= 5) return STEPS.length - 1;
   return Math.min(Math.max(replies.length - 1, 0), STEPS.length - 2);
 }
 

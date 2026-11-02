@@ -361,7 +361,15 @@ Answers "does this screening need a visit, and how does it get booked?" plus e-p
 - Chat: per-turn language lock to the patient's latest message, 1-2 sentence replies, ~4 questions (hard cap 6 incl. greeting), no repeated questions; session persisted in sessionStorage + auto-reopen; 401 refresh on streaming; New Screening race fixed (inputs disabled while opening).
 - Admin modals render via portal. Tested: iteration_25 + iteration_26 (100%).
 
+## Jun 2026 — Hotjar-style analytics + B2C guidance + screening steps
+- Tracker (lib/analytics.js, rrweb 2.2.0): pageviews/leave durations/clicks/rage/dead + session replays (inputs, main, header, portals masked; main images blocked) for all signed-in non-super-admin users; POST /api/analytics/collect; 30-day TTL (analytics_events/sessions/replays).
+- /admin/analytics: Overview, Heatmaps (rrweb snapshot + heat overlay, desktop/mobile), Signup funnel (B2C), Journeys, Rage & dead clicks (watch at moment), Session replays. Filters in URL.
+- Patient Dashboard "Start here" checklist (chat → medications → Pill ID → find care) + one-time guided tour; GET/POST /api/getting-started.
+- Health chat topic steps (Your symptom → Timing → Severity → Other details → Summary); backend nudges topic order; **bold** rendered.
+- Tested iteration_27 (backend 18/18, frontend flows pass). Follow-up fixes (leave on tab hide, wider masking, dead-click noise, snapshot choice, session ownership, id-path regex) applied but NOT re-tested: MongoDB Atlas started rejecting the login ("bad auth") at end of session.
+
 ## Backlog
+- P0: Restore MongoDB Atlas credentials (MONGO_URL user hhisham93_db_user rejected) then retest analytics follow-ups.
 - P1: Owner to mark remaining personal test @gmail accounts as Demo in /admin/users (preview shows 10 "real").
 - P1: Demo requests inbox UI in super admin; native App Store / Play Store wrapper (Capacitor) when ready
 - P1: Week View, Vitals Trend Warnings, Pharmacist Inbox, Pharmacy Ad Console

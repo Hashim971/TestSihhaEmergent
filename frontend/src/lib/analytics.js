@@ -7,7 +7,7 @@ const INTERACTIVE = "a,button,input,select,textarea,label,summary,[role=button],
 let st = null;
 
 const now = () => Date.now();
-const normPath = (p) => p.split("/").map((s) => (/^(?=.*\d)[A-Za-z0-9_-]{6,}$/.test(s) ? ":id" : s)).join("/") || "/";
+const normPath = (p) => p.split("/").map((s) => (/^([A-Za-z]+_[A-Za-z0-9]{6,}|[0-9a-fA-F-]{12,}|\d+|[A-Z]{2,5}-[A-Z0-9]{4,})$/.test(s) ? ":id" : s)).join("/") || "/";
 
 function sessionId() {
   const raw = sessionStorage.getItem(SID_KEY);
@@ -17,8 +17,9 @@ function sessionId() {
   return id;
 }
 
-function describe(el) {
+function describe(el, dead = false) {
   const tagged = el.closest("[data-testid]");
+  if (dead) return `${el.tagName.toLowerCase()}${tagged ? ` in ${tagged.getAttribute("data-testid")}` : ""}`.slice(0, 120);
   if (tagged) return tagged.getAttribute("data-testid").slice(0, 120);
   const ctl = el.closest("a,button");
   const label = ctl ? (ctl.getAttribute("aria-label") || ctl.innerText || "").trim().slice(0, 40) : "";
@@ -55,11 +56,19 @@ function onClick(e) {
   st.clicks = st.clicks.filter((c) => t - c.t < 800 && Math.hypot(c.x - e.pageX, c.y - e.pageY) < 40);
   st.clicks.push({ t, x: e.pageX, y: e.pageY });
   if (st.clicks.length === 3) push("rage", point);
-  if (!e.target.closest(INTERACTIVE) && getComputedStyle(e.target).cursor !== "pointer") push("dead", point);
+  else if (st.clicks.length === 1 && !e.target.closest(INTERACTIVE) && getComputedStyle(e.target).cursor !== "pointer") {
+    push("dead", { ...point, target: describe(e.target, true) });
+  }
 }
 
 function onHide() {
-  if (document.visibilityState === "hidden") flush(true);
+  if (!st) return;
+  if (document.visibilityState === "hidden") {
+    if (st.path) push("leave", { duration: now() - st.since });
+    flush(true);
+  } else {
+    st.since = now();
+  }
 }
 
 export function startAnalytics(user) {
@@ -68,7 +77,7 @@ export function startAnalytics(user) {
   st.stopRecord = record({
     emit: (ev) => { st && st.replay.push(ev); if (st && st.replay.length > 400) flush(); },
     maskAllInputs: true,
-    maskTextSelector: "main, [data-private]",
+    maskTextSelector: "main, header, body > div:not(#root), [data-sonner-toaster], [role=dialog], [data-private]",
     blockSelector: "main img, video, canvas, [data-rr-block]",
     sampling: { mousemove: 150, scroll: 200, input: "last" },
     inlineStylesheet: true,
