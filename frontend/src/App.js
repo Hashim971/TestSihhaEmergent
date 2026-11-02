@@ -1,5 +1,5 @@
 import React from "react";
-import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation, Navigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider } from "./context/AuthContext";
 import Landing from "./pages/Landing";
@@ -21,6 +21,13 @@ import DoctorPortal from "./pages/DoctorPortal";
 import DoctorDashboard from "./pages/DoctorDashboard";
 import DoctorSchedule from "./pages/DoctorSchedule";
 import AdminAssignments from "./pages/AdminAssignments";
+import AdminLayout from "./pages/admin/AdminLayout";
+import Accounts from "./pages/admin/Accounts";
+import AccountWorkspace from "./pages/admin/AccountWorkspace";
+import FeatureFlags from "./pages/admin/FeatureFlags";
+import MyHospital from "./pages/MyHospital";
+import { PlatformProvider } from "./context/PlatformContext";
+import { StagingBar } from "./components/StagingBar";
 import Intake from "./pages/Intake";
 import EncounterDetail from "./pages/EncounterDetail";
 import Settings from "./pages/Settings";
@@ -32,11 +39,14 @@ import { ServiceUnavailable } from "./components/ServiceUnavailable";
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <AppRouter />
-        <ServiceUnavailable />
-        <Toaster position="top-right" richColors />
-      </AuthProvider>
+      <PlatformProvider>
+        <AuthProvider>
+          <StagingBar />
+          <AppRouter />
+          <ServiceUnavailable />
+          <Toaster position="top-right" richColors />
+        </AuthProvider>
+      </PlatformProvider>
     </BrowserRouter>
   );
 }
@@ -68,10 +78,17 @@ function AppRouter() {
             <Route path="/doctor" element={<DoctorDashboard />} />
             <Route path="/doctor/patients" element={<DoctorPortal />} />
             <Route path="/doctor/schedule" element={<DoctorSchedule />} />
-            <Route path="/admin/assignments" element={<AdminAssignments />} />
             <Route path="/intake/:encounterId" element={<Intake />} />
             <Route path="/doctor/encounters/:id" element={<EncounterDetail />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/my-hospital" element={<MyHospital />} />
+          </Route>
+          <Route element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
+            <Route path="/admin" element={<Navigate to="/admin/accounts" replace />} />
+            <Route path="/admin/accounts" element={<Accounts />} />
+            <Route path="/admin/accounts/:accountId" element={<AccountWorkspace />} />
+            <Route path="/admin/flags" element={<FeatureFlags />} />
+            <Route path="/admin/assignments" element={<AdminAssignments />} />
           </Route>
         </Routes>
     </>

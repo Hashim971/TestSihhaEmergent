@@ -7,6 +7,10 @@ import random
 import base64
 import asyncio
 import tempfile
+import csv
+import io
+import socket
+from urllib.parse import urlparse
 import hashlib
 import secrets
 from datetime import datetime, timezone, timedelta
@@ -41,7 +45,7 @@ from agents.patient_summary import PatientSummaryAgent
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-from emailer import send_email, password_reset_email
+from emailer import send_email, password_reset_email, account_invite_email
 
 client = AsyncIOMotorClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=8000)
 db = client[os.environ["DB_NAME"]]
@@ -152,12 +156,15 @@ def create_refresh_token(user_id: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
+TRUSTED_PROXY_HOPS = 2
+
+
 def client_ip(request: Request) -> str:
-    for header in ("cf-connecting-ip", "x-real-ip"):
-        if request.headers.get(header):
-            return request.headers[header].strip()
-    forwarded = request.headers.get("x-forwarded-for")
-    return forwarded.split(",")[0].strip() if forwarded else request.client.host
+    """The edge appends [client, cloudflare, load balancer]; entries left of the client are spoofable."""
+    hops = [h.strip() for h in (request.headers.get("x-forwarded-for") or "").split(",") if h.strip()]
+    if len(hops) > TRUSTED_PROXY_HOPS:
+        return hops[-(TRUSTED_PROXY_HOPS + 1)]
+    return request.client.host
 
 
 def token_predates_password_change(payload: dict, user: dict) -> bool:
@@ -201,6 +208,7 @@ class RegisterRequest(BaseModel):
     email: str
     password: str = Field(min_length=6)
     requested_role: Optional[str] = None
+    tenant_account_id: Optional[str] = Field(default=None, max_length=20)
 
 
 class LoginRequest(BaseModel):
@@ -217,6 +225,7 @@ async def register(body: RegisterRequest, response: Response):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     user_id = f"user_{uuid.uuid4().hex[:12]}"
+    tenant = await _active_tenant(body.tenant_account_id) if body.tenant_account_id else None
     await db.users.insert_one({
         "user_id": user_id,
         "email": email,
@@ -228,6 +237,7 @@ async def register(body: RegisterRequest, response: Response):
         "sharing_enabled": True,
         "assigned_doctor_user_id": None,
         "onboarding_completed": False,
+        "account_id": tenant["account_id"] if tenant else None,
         "created_at": iso(),
     })
     set_auth_cookies(response, create_access_token(user_id, email), create_refresh_token(user_id))
@@ -238,21 +248,23 @@ async def register(body: RegisterRequest, response: Response):
 async def login(body: LoginRequest, request: Request, response: Response):
     email = body.email.strip().lower()
     identifier = f"{client_ip(request)}:{email}"
+    account_key = f"acct:{email}"
     attempt = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
-    if attempt and attempt.get("locked_until"):
-        locked_until = datetime.fromisoformat(attempt["locked_until"])
-        if locked_until > now_utc():
+    account = await db.login_attempts.find_one({"identifier": account_key}, {"_id": 0})
+    for row in (attempt, account):
+        if row and row.get("locked_until") and datetime.fromisoformat(row["locked_until"]) > now_utc():
             raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 15 minutes.")
     user = await db.users.find_one({"email": email})
     if not user or not user.get("password_hash") or not verify_password(body.password, user["password_hash"]):
-        count = (attempt.get("count", 0) + 1) if attempt else 1
-        update = {"identifier": identifier, "count": count, "updated_at": iso()}
-        if count >= 5:
-            update["locked_until"] = iso(now_utc() + timedelta(minutes=15))
-            update["count"] = 0
-        await db.login_attempts.update_one({"identifier": identifier}, {"$set": update}, upsert=True)
+        for key, row, limit in ((identifier, attempt, 5), (account_key, account, 10)):
+            count = (row.get("count", 0) + 1) if row else 1
+            update = {"identifier": key, "count": count, "updated_at": iso()}
+            if count >= limit:
+                update["locked_until"] = iso(now_utc() + timedelta(minutes=15))
+                update["count"] = 0
+            await db.login_attempts.update_one({"identifier": key}, {"$set": update}, upsert=True)
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    await db.login_attempts.delete_one({"identifier": identifier})
+    await db.login_attempts.delete_many({"identifier": {"$in": [identifier, account_key]}})
     set_auth_cookies(response, create_access_token(user["user_id"], email), create_refresh_token(user["user_id"]))
     return with_capabilities(await db.users.find_one({"user_id": user["user_id"]}, USER_PROJECTION))
 
@@ -417,23 +429,32 @@ async def forgot_password(body: ForgotPasswordIn, request: Request):
     user = await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1, "name": 1})
     if not user:
         return GENERIC_RESET_REPLY
+    token = await _issue_password_token(user["user_id"], email, RESET_TOKEN_MINUTES)
+    subject, html = password_reset_email(user.get("name") or "there",
+                                         f"{_app_origin(request)}/auth/reset?token={token}")
+    _send_in_background(user["user_id"], email, subject, html)
+    return GENERIC_RESET_REPLY
+
+
+async def _issue_password_token(user_id: str, email: str, minutes: int) -> str:
     token = secrets.token_urlsafe(32)
-    await db.password_reset_tokens.update_many({"user_id": user["user_id"], "used_at": None},
+    await db.password_reset_tokens.update_many({"user_id": user_id, "used_at": None},
                                                {"$set": {"used_at": iso(), "superseded": True}})
     await db.password_reset_tokens.insert_one({
         "token_hash": _hash_token(token),
-        "user_id": user["user_id"],
+        "user_id": user_id,
         "email": email,
-        "expires_at": now_utc() + timedelta(minutes=RESET_TOKEN_MINUTES),
+        "expires_at": now_utc() + timedelta(minutes=minutes),
         "used_at": None,
         "created_at": iso(),
     })
-    subject, html = password_reset_email(user.get("name") or "there",
-                                         f"{_app_origin(request)}/auth/reset?token={token}")
-    task = asyncio.create_task(_deliver_reset_email(user["user_id"], email, subject, html))
+    return token
+
+
+def _send_in_background(user_id: str, email: str, subject: str, html: str):
+    task = asyncio.create_task(_deliver_reset_email(user_id, email, subject, html))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-    return GENERIC_RESET_REPLY
 
 
 @api.post("/auth/reset-password")
@@ -493,6 +514,15 @@ async def seed_and_index():
     await db.intake_forms.create_index("encounter_id", unique=True)
     await db.intake_forms.create_index([("patient_user_id", 1), ("status", 1)])
     await db.consultation_audio.create_index("encounter_id")
+    await db.accounts.create_index("account_id", unique=True)
+    await db.accounts.create_index("custom_domain", unique=True,
+                                   partialFilterExpression={"custom_domain": {"$type": "string"}})
+    await db.users.create_index("account_id")
+    await db.health_reports.create_index([("user_id", 1), ("generated_at", -1)])
+    await db.imported_records.create_index([("account_id", 1), ("user_id", 1)])
+    await db.feature_flags.create_index("key", unique=True)
+    if IS_STAGING:
+        await seed_demo_accounts()
     await db.consultation_audio.create_index([("deleted_at", 1), ("retention_expires_at", 1)])
     await db.catalog_items.create_index([("pharmacy_id", 1), ("active", 1)])
     await db.catalog_items.create_index([("name_en", "text"), ("name_ar", "text"), ("generic_name", "text")])
@@ -3526,7 +3556,595 @@ async def prescription_basket_options(prescription_id: str, user=Depends(get_cur
     return {"prescription_id": prescription_id, "proposals": proposals}
 
 
+# ---------- Super admin: accounts, feature flags, white-label (staging) ----------
+APP_ENV = os.environ["APP_ENV"].strip().lower()
+IS_STAGING = APP_ENV == "staging"
 
+FEATURE_FLAGS = [
+    {"key": "health_chat", "label": "AI health chat & screening", "description": "Patients chat with the AI and get a screening report.", "default": True},
+    {"key": "pill_id", "label": "Pill identification", "description": "Photograph a pill to identify it.", "default": True},
+    {"key": "booking", "label": "Visit booking", "description": "Patients book published doctor slots.", "default": True},
+    {"key": "prescriptions", "label": "Prescriptions", "description": "Doctors write and send prescriptions.", "default": True},
+    {"key": "visit_summaries", "label": "Patient visit summaries", "description": "Doctor-reviewed plain-language visit notes.", "default": True},
+    {"key": "pharmacy_marketplace", "label": "Pharmacy marketplace", "description": "Partner pharmacy discovery and refills.", "default": True},
+    {"key": "live_transcript", "label": "Live Arabic transcript", "description": "Transcript lines appear while the doctor records.", "default": True},
+    {"key": "white_label", "label": "White-label branding", "description": "Hospital logo, name, colours and web address. Staging only.", "default": False, "staging_only": True},
+]
+FLAG_KEYS = {f["key"] for f in FEATURE_FLAGS}
+ACCOUNT_TYPES = ("hospital", "clinic", "pharmacy_group")
+ACCOUNT_STATUSES = ("trial", "subscribed", "suspended")
+ACCOUNT_ROLES = ("member", "account_admin")
+HEX_COLOR = r"^#[0-9A-Fa-f]{6}$"
+DOMAIN_RE = r"^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
+ACCOUNT_PROJECTION = {"_id": 0}
+IMPORT_COLUMNS = ["name", "email", "phone", "date_of_birth", "gender", "conditions", "allergies",
+                  "medications", "last_visit", "notes"]
+IMPORT_MAX_BYTES = 2 * 1024 * 1024
+IMPORT_MAX_ROWS = 2000
+
+
+def require_staging():
+    if not IS_STAGING:
+        raise HTTPException(status_code=403, detail="White-label setup is only available in the staging environment")
+
+
+async def global_flags() -> dict:
+    stored = {f["key"]: f["enabled"] for f in await db.feature_flags.find({}, {"_id": 0}).to_list(100)}
+    return {f["key"]: stored.get(f["key"], f["default"]) for f in FEATURE_FLAGS}
+
+
+async def effective_flags(account: Optional[dict]) -> dict:
+    flags = await global_flags()
+    if account:
+        flags.update({k: v for k, v in (account.get("features") or {}).items() if k in FLAG_KEYS})
+    if not IS_STAGING:
+        flags["white_label"] = False
+    return flags
+
+
+async def get_account_or_404(account_id: str) -> dict:
+    account = await db.accounts.find_one({"account_id": account_id.upper()}, ACCOUNT_PROJECTION)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return account
+
+
+async def _active_tenant(account_id: str) -> Optional[dict]:
+    if not IS_STAGING:
+        return None
+    account = await db.accounts.find_one({"account_id": account_id.upper(), "status": {"$ne": "suspended"}},
+                                         ACCOUNT_PROJECTION)
+    if account and (await effective_flags(account))["white_label"]:
+        return account
+    return None
+
+
+async def new_account_id() -> str:
+    while True:
+        candidate = f"ACC-{secrets.token_hex(3).upper()}"
+        if not await db.accounts.find_one({"account_id": candidate}, {"_id": 1}):
+            return candidate
+
+
+async def account_counts(account_ids: list) -> dict:
+    rows = await db.users.aggregate([
+        {"$match": {"account_id": {"$in": account_ids}}},
+        {"$group": {"_id": {"a": "$account_id", "r": "$role"}, "n": {"$sum": 1}}},
+    ]).to_list(1000)
+    counts = {a: {"staff": 0, "customers": 0} for a in account_ids}
+    for r in rows:
+        counts[r["_id"]["a"]]["customers" if r["_id"]["r"] == "patient" else "staff"] += r["n"]
+    return counts
+
+
+def account_card(account: dict, counts: dict) -> dict:
+    branding = account.get("branding") or {}
+    return {**account, "staff_count": counts.get("staff", 0), "customer_count": counts.get("customers", 0),
+            "user_count": counts.get("staff", 0) + counts.get("customers", 0),
+            "logo_url": f"/api/tenant/{account['account_id']}/logo" if branding.get("logo_path") else None}
+
+
+class AccountIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    type: str = Field(default="hospital", pattern="^(hospital|clinic|pharmacy_group)$")
+    status: str = Field(default="trial", pattern="^(trial|subscribed|suspended)$")
+    city: Optional[str] = Field(default=None, max_length=80)
+    contact_email: Optional[str] = Field(default=None, max_length=254)
+
+
+class AccountPatch(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=120)
+    type: Optional[str] = Field(default=None, pattern="^(hospital|clinic|pharmacy_group)$")
+    status: Optional[str] = Field(default=None, pattern="^(trial|subscribed|suspended)$")
+    city: Optional[str] = Field(default=None, max_length=80)
+    contact_email: Optional[str] = Field(default=None, max_length=254)
+    features: Optional[dict] = None
+
+
+class BrandingPatch(BaseModel):
+    display_name: Optional[str] = Field(default=None, max_length=80)
+    primary_color: Optional[str] = Field(default=None, pattern=HEX_COLOR)
+    accent_color: Optional[str] = Field(default=None, pattern=HEX_COLOR)
+    default_language: Optional[str] = Field(default=None, pattern="^(ar|en)$")
+    custom_domain: Optional[str] = Field(default=None, max_length=253)
+
+
+class AccountUserIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    name: str = Field(min_length=1, max_length=120)
+    role: str = Field(default="patient", pattern="^(patient|doctor)$")
+    account_role: str = Field(default="member", pattern="^(member|account_admin)$")
+
+
+class AccountUserPatch(BaseModel):
+    role: Optional[str] = Field(default=None, pattern="^(patient|doctor)$")
+    account_role: Optional[str] = Field(default=None, pattern="^(member|account_admin)$")
+
+
+class FlagPatch(BaseModel):
+    enabled: bool
+
+
+@api.get("/env")
+async def environment():
+    return {"env": APP_ENV, "is_staging": IS_STAGING}
+
+
+@api.get("/flags")
+async def my_flags(user=Depends(get_current_user)):
+    account = await db.accounts.find_one({"account_id": user.get("account_id")}, ACCOUNT_PROJECTION) \
+        if user.get("account_id") else None
+    return await effective_flags(account)
+
+
+@api.get("/tenant")
+async def resolve_tenant(host: Optional[str] = None, account: Optional[str] = None):
+    """Public branding lookup for white-label sites (staging only): by custom web address or account ID."""
+    found = None
+    if IS_STAGING and host:
+        row = await db.accounts.find_one({"custom_domain": host.strip().lower()}, {"_id": 0, "account_id": 1})
+        found = await _active_tenant(row["account_id"]) if row else None
+    if IS_STAGING and not found and account:
+        found = await _active_tenant(account)
+    if not found:
+        return {"tenant": None}
+    branding = found.get("branding") or {}
+    return {"tenant": {
+        "account_id": found["account_id"],
+        "name": branding.get("display_name") or found["name"],
+        "primary_color": branding.get("primary_color"),
+        "accent_color": branding.get("accent_color"),
+        "default_language": found.get("default_language") or "en",
+        "logo_url": f"/api/tenant/{found['account_id']}/logo" if branding.get("logo_path") else None,
+        "features": await effective_flags(found),
+    }}
+
+
+@api.get("/tenant/{account_id}/logo")
+async def tenant_logo(account_id: str):
+    account = await get_account_or_404(account_id)
+    path = (account.get("branding") or {}).get("logo_path")
+    if not path:
+        raise HTTPException(status_code=404, detail="No logo")
+    data, content_type = get_object(path)
+    return Response(content=data, media_type=content_type, headers={"Cache-Control": "public, max-age=300"})
+
+
+@api.get("/admin/accounts")
+async def list_accounts(q: Optional[str] = None, type: Optional[str] = None, status: Optional[str] = None,
+                        page: int = 1, limit: int = 25, admin=Depends(require_admin)):
+    query = {}
+    if q and q.strip():
+        pattern = re.escape(q.strip())
+        query["$or"] = [{"name": {"$regex": pattern, "$options": "i"}},
+                        {"account_id": {"$regex": pattern, "$options": "i"}},
+                        {"custom_domain": {"$regex": pattern, "$options": "i"}},
+                        {"city": {"$regex": pattern, "$options": "i"}}]
+    if type in ACCOUNT_TYPES:
+        query["type"] = type
+    if status in ACCOUNT_STATUSES:
+        query["status"] = status
+    limit = max(1, min(limit, 100))
+    total = await db.accounts.count_documents(query)
+    rows = await db.accounts.find(query, ACCOUNT_PROJECTION).sort("name", 1) \
+        .skip((max(page, 1) - 1) * limit).limit(limit).to_list(limit)
+    counts = await account_counts([a["account_id"] for a in rows])
+    return {"total": total, "page": max(page, 1), "limit": limit,
+            "items": [account_card(a, counts[a["account_id"]]) for a in rows]}
+
+
+@api.get("/admin/accounts/export")
+async def export_accounts(admin=Depends(require_admin)):
+    rows = await db.accounts.find({}, ACCOUNT_PROJECTION).sort("name", 1).to_list(10000)
+    counts = await account_counts([a["account_id"] for a in rows])
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["account_id", "name", "type", "status", "city", "staff", "customers", "custom_domain", "created_at"])
+    for a in rows:
+        c = counts[a["account_id"]]
+        writer.writerow([a["account_id"], a["name"], a["type"], a["status"], a.get("city") or "", c["staff"],
+                         c["customers"], a.get("custom_domain") or "", a["created_at"]])
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=sihha-accounts.csv"})
+
+
+@api.post("/admin/accounts")
+async def create_account(body: AccountIn, admin=Depends(require_admin)):
+    account = {"account_id": await new_account_id(), "name": body.name.strip(), "type": body.type,
+               "status": body.status, "city": body.city, "contact_email": body.contact_email,
+               "branding": {}, "default_language": "ar", "custom_domain": None, "domain_verified": False,
+               "features": {}, "created_by": admin["user_id"], "created_at": iso()}
+    await db.accounts.insert_one(account)
+    return account_card(await get_account_or_404(account["account_id"]), {})
+
+
+@api.get("/admin/accounts/{account_id}")
+async def get_account(account_id: str, admin=Depends(require_admin)):
+    account = await get_account_or_404(account_id)
+    counts = await account_counts([account["account_id"]])
+    return {**account_card(account, counts[account["account_id"]]), "effective_flags": await effective_flags(account)}
+
+
+@api.patch("/admin/accounts/{account_id}")
+async def update_account(account_id: str, body: AccountPatch, admin=Depends(require_admin)):
+    account = await get_account_or_404(account_id)
+    update = body.model_dump(exclude_none=True)
+    if "features" in update:
+        update["features"] = {k: bool(v) for k, v in update["features"].items() if k in FLAG_KEYS}
+    if update:
+        update["updated_at"] = iso()
+        await db.accounts.update_one({"account_id": account["account_id"]}, {"$set": update})
+    return await get_account(account["account_id"], admin)
+
+
+@api.patch("/admin/accounts/{account_id}/branding")
+async def update_branding(account_id: str, body: BrandingPatch, admin=Depends(require_admin)):
+    require_staging()
+    account = await get_account_or_404(account_id)
+    data = body.model_dump(exclude_unset=True)
+    update = {f"branding.{k}": v for k, v in data.items() if k in ("display_name", "primary_color", "accent_color")}
+    if "default_language" in data and data["default_language"]:
+        update["default_language"] = data["default_language"]
+    if "custom_domain" in data:
+        domain = (data["custom_domain"] or "").strip().lower() or None
+        if domain and not re.match(DOMAIN_RE, domain):
+            raise HTTPException(status_code=422, detail="Enter a web address like care.yourhospital.sa")
+        if domain and await db.accounts.find_one({"custom_domain": domain, "account_id": {"$ne": account["account_id"]}}):
+            raise HTTPException(status_code=409, detail="That web address is already used by another account")
+        if domain != account.get("custom_domain"):
+            update.update(custom_domain=domain, domain_verified=False)
+    if update:
+        update["updated_at"] = iso()
+        await db.accounts.update_one({"account_id": account["account_id"]}, {"$set": update})
+    return await get_account(account["account_id"], admin)
+
+
+@api.post("/admin/accounts/{account_id}/logo")
+async def upload_account_logo(account_id: str, file: UploadFile = File(...), admin=Depends(require_admin)):
+    require_staging()
+    account = await get_account_or_404(account_id)
+    if file.content_type not in ("image/png", "image/jpeg", "image/webp", "image/svg+xml"):
+        raise HTTPException(status_code=415, detail="Upload a PNG, JPG, WEBP or SVG logo")
+    data = await file.read(2 * 1024 * 1024 + 1)
+    if len(data) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Logo must be under 2 MB")
+    ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg"}[file.content_type]
+    result = put_object(f"{STORAGE_APP}/branding/{account['account_id']}/{uuid.uuid4().hex}.{ext}", data,
+                        file.content_type)
+    await db.accounts.update_one({"account_id": account["account_id"]},
+                                 {"$set": {"branding.logo_path": result["path"], "updated_at": iso()}})
+    return await get_account(account["account_id"], admin)
+
+
+@api.post("/admin/accounts/{account_id}/domain/verify")
+async def verify_account_domain(account_id: str, request: Request, admin=Depends(require_admin)):
+    require_staging()
+    account = await get_account_or_404(account_id)
+    domain = account.get("custom_domain")
+    if not domain:
+        raise HTTPException(status_code=400, detail="Add a web address first")
+    app_host = urlparse(_app_origin(request)).hostname
+
+    def addresses(host):
+        try:
+            return {a[4][0] for a in socket.getaddrinfo(host, 443)}
+        except OSError:
+            return set()
+    domain_ips, app_ips = await asyncio.to_thread(addresses, domain), await asyncio.to_thread(addresses, app_host)
+    verified = bool(domain_ips & app_ips)
+    await db.accounts.update_one({"account_id": account["account_id"]}, {"$set": {"domain_verified": verified}})
+    return {"verified": verified, "domain": domain, "points_to": app_host, "resolves": bool(domain_ips)}
+
+
+async def _account_users(account_id: str, kind: Optional[str], q: Optional[str], limit: int) -> dict:
+    query = {"account_id": account_id}
+    if kind == "staff":
+        query["role"] = {"$ne": "patient"}
+    elif kind == "customers":
+        query["role"] = "patient"
+    if q and q.strip():
+        pattern = re.escape(q.strip())
+        query["$or"] = [{"name": {"$regex": pattern, "$options": "i"}}, {"email": {"$regex": pattern, "$options": "i"}}]
+    total = await db.users.count_documents(query)
+    users = await db.users.find(query, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "role": 1, "account_role": 1,
+                                        "created_at": 1, "imported": 1, "invited_at": 1, "password_hash": 1}) \
+        .sort("name", 1).limit(max(1, min(limit, 200))).to_list(200)
+    records = {r["user_id"]: r for r in await db.imported_records.find(
+        {"account_id": account_id, "user_id": {"$in": [u["user_id"] for u in users]}}, {"_id": 0}).to_list(200)}
+    items = []
+    for u in users:
+        has_password = bool(u.pop("password_hash", None))
+        items.append({**u, "account_role": u.get("account_role") or "member",
+                      "status": "active" if has_password else "invited",
+                      "history": records.get(u["user_id"])})
+    return {"total": total, "items": items}
+
+
+async def _account_overview(account: dict) -> dict:
+    aid = account["account_id"]
+    counts = (await account_counts([aid]))[aid]
+    staff_ids = [u["user_id"] for u in await db.users.find(
+        {"account_id": aid, "role": {"$ne": "patient"}}, {"_id": 0, "user_id": 1}).to_list(5000)]
+    customer_ids = [u["user_id"] for u in await db.users.find(
+        {"account_id": aid, "role": "patient"}, {"_id": 0, "user_id": 1}).to_list(50000)]
+    since = iso(now_utc() - timedelta(days=30))
+    branding = account.get("branding") or {}
+    (imported, doctor_count, admin_count, new_customers, visits, visits_30d, prescriptions, screenings,
+     recent_staff, recent_customers) = await asyncio.gather(
+        db.imported_records.count_documents({"account_id": aid}),
+        db.users.count_documents({"account_id": aid, "role": "doctor"}),
+        db.users.count_documents({"account_id": aid, "account_role": "account_admin"}),
+        db.users.count_documents({"account_id": aid, "role": "patient", "created_at": {"$gte": since}}),
+        db.encounters.count_documents({"doctor_user_id": {"$in": staff_ids}}),
+        db.encounters.count_documents({"doctor_user_id": {"$in": staff_ids}, "created_at": {"$gte": since}}),
+        db.prescriptions.count_documents({"profile_id": {"$in": customer_ids}}),
+        db.health_reports.count_documents({"user_id": {"$in": customer_ids}}),
+        _account_users(aid, "staff", None, 5),
+        db.users.find({"account_id": aid, "role": "patient"}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "created_at": 1})
+        .sort("created_at", -1).limit(5).to_list(5),
+    )
+    checklist = [
+        {"key": "created", "label": "Account created with a unique ID", "done": True},
+        {"key": "branding", "label": "Brand name and colours set", "done": bool(branding.get("display_name") and branding.get("primary_color"))},
+        {"key": "logo", "label": "Logo uploaded", "done": bool(branding.get("logo_path"))},
+        {"key": "language", "label": "Default language chosen", "done": bool(account.get("default_language"))},
+        {"key": "features", "label": "Features chosen for this hospital", "done": bool(account.get("features"))},
+        {"key": "staff", "label": "First staff member invited", "done": counts["staff"] > 0},
+        {"key": "import", "label": "Existing patient data imported (optional)", "done": imported > 0, "optional": True},
+        {"key": "domain", "label": "Own web address connected", "done": bool(account.get("domain_verified"))},
+    ]
+    return {
+        "account": account_card(account, counts),
+        "staff_count": counts["staff"], "customer_count": counts["customers"],
+        "doctor_count": doctor_count, "account_admin_count": admin_count,
+        "new_customers_30d": new_customers, "imported_records": imported,
+        "visits": visits, "visits_30d": visits_30d, "prescriptions": prescriptions, "screenings": screenings,
+        "recent_staff": recent_staff["items"], "recent_customers": recent_customers,
+        "checklist": checklist,
+        "checklist_done": sum(1 for c in checklist if c["done"]),
+    }
+
+
+@api.get("/admin/accounts/{account_id}/overview")
+async def admin_account_overview(account_id: str, admin=Depends(require_admin)):
+    return await _account_overview(await get_account_or_404(account_id))
+
+
+@api.get("/admin/accounts/{account_id}/users")
+async def admin_account_users(account_id: str, kind: Optional[str] = None, q: Optional[str] = None,
+                              limit: int = 100, admin=Depends(require_admin)):
+    account = await get_account_or_404(account_id)
+    return await _account_users(account["account_id"], kind, q, limit)
+
+
+@api.post("/admin/accounts/{account_id}/users")
+async def invite_account_user(account_id: str, body: AccountUserIn, request: Request, admin=Depends(require_admin)):
+    account = await get_account_or_404(account_id)
+    email = body.email.strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address")
+    existing = await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1, "account_id": 1})
+    if existing and existing.get("account_id") and existing["account_id"] != account["account_id"]:
+        raise HTTPException(status_code=409, detail=f"This person already belongs to account {existing['account_id']}")
+    fields = {"account_id": account["account_id"], "role": body.role, "account_role": body.account_role}
+    if existing:
+        await db.users.update_one({"user_id": existing["user_id"]}, {"$set": fields})
+        return {"user_id": existing["user_id"], "invited": False, "linked": True}
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    await db.users.insert_one({"user_id": user_id, "email": email, "name": body.name.strip(), "picture": None,
+                               "clinician_requested": False, "sharing_enabled": True, "assigned_doctor_user_id": None,
+                               "onboarding_completed": False, "invited_at": iso(), "invited_by": admin["user_id"],
+                               "created_at": iso(), **fields})
+    token = await _issue_password_token(user_id, email, 7 * 24 * 60)
+    subject, html = account_invite_email(body.name.strip(), (account.get("branding") or {}).get("display_name") or account["name"],
+                                         f"{_app_origin(request)}/auth/reset?token={token}")
+    _send_in_background(user_id, email, subject, html)
+    return {"user_id": user_id, "invited": True, "linked": False}
+
+
+@api.patch("/admin/accounts/{account_id}/users/{user_id}")
+async def update_account_user(account_id: str, user_id: str, body: AccountUserPatch, admin=Depends(require_admin)):
+    account = await get_account_or_404(account_id)
+    update = body.model_dump(exclude_none=True)
+    result = await db.users.update_one({"user_id": user_id, "account_id": account["account_id"]}, {"$set": update}) \
+        if update else None
+    if result is not None and result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found in this account")
+    return {"ok": True}
+
+
+@api.delete("/admin/accounts/{account_id}/users/{user_id}")
+async def remove_account_user(account_id: str, user_id: str, admin=Depends(require_admin)):
+    account = await get_account_or_404(account_id)
+    result = await db.users.update_one({"user_id": user_id, "account_id": account["account_id"]},
+                                       {"$set": {"account_id": None, "account_role": None}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found in this account")
+    return {"ok": True}
+
+
+def _split_list(value: str) -> list:
+    return [v.strip() for v in re.split(r"[;|]", value or "") if v.strip()][:50]
+
+
+@api.post("/admin/accounts/{account_id}/import")
+async def import_customers(account_id: str, file: UploadFile = File(...), admin=Depends(require_admin)):
+    """CSV import of a hospital's existing patients and their history. Imported patients get no password until invited."""
+    require_staging()
+    account = await get_account_or_404(account_id)
+    raw = await file.read(IMPORT_MAX_BYTES + 1)
+    if len(raw) > IMPORT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="CSV must be under 2 MB")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="Save the file as UTF-8 CSV and try again")
+    reader = csv.DictReader(io.StringIO(text))
+    headers = [h.strip().lower() for h in (reader.fieldnames or [])]
+    if "name" not in headers or "email" not in headers:
+        raise HTTPException(status_code=422, detail="The CSV needs at least 'name' and 'email' columns")
+    created = linked = 0
+    errors = []
+    for index, row in enumerate(reader, start=2):
+        if index - 1 > IMPORT_MAX_ROWS:
+            errors.append({"row": index, "reason": f"Stopped after {IMPORT_MAX_ROWS} rows"})
+            break
+        row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
+        name, email = row.get("name", ""), row.get("email", "").lower()
+        if not name or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+            errors.append({"row": index, "reason": "Missing name or valid email"})
+            continue
+        existing = await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1, "account_id": 1, "role": 1})
+        if existing and existing.get("account_id") not in (None, account["account_id"]):
+            errors.append({"row": index, "reason": f"{email} belongs to another account"})
+            continue
+        if existing and existing.get("role") != "patient":
+            errors.append({"row": index, "reason": f"{email} is a staff account"})
+            continue
+        if existing:
+            user_id = existing["user_id"]
+            await db.users.update_one({"user_id": user_id}, {"$set": {"account_id": account["account_id"]}})
+            linked += 1
+        else:
+            user_id = f"user_{uuid.uuid4().hex[:12]}"
+            await db.users.insert_one({"user_id": user_id, "email": email, "name": name, "picture": None,
+                                       "role": "patient", "account_id": account["account_id"], "account_role": "member",
+                                       "clinician_requested": False, "sharing_enabled": True,
+                                       "assigned_doctor_user_id": None, "onboarding_completed": False,
+                                       "imported": True, "created_at": iso()})
+            created += 1
+        await db.imported_records.update_one(
+            {"account_id": account["account_id"], "user_id": user_id},
+            {"$set": {"phone": row.get("phone") or None, "date_of_birth": row.get("date_of_birth") or None,
+                      "gender": row.get("gender") or None, "conditions": _split_list(row.get("conditions")),
+                      "allergies": _split_list(row.get("allergies")), "medications": _split_list(row.get("medications")),
+                      "last_visit": row.get("last_visit") or None, "notes": (row.get("notes") or "")[:2000] or None,
+                      "imported_at": iso(), "imported_by": admin["user_id"]},
+             "$setOnInsert": {"record_id": f"imp_{uuid.uuid4().hex[:12]}"}},
+            upsert=True)
+    return {"created": created, "linked": linked, "errors": errors[:100], "error_count": len(errors)}
+
+
+@api.get("/admin/search")
+async def admin_quick_search(q: str, admin=Depends(require_admin)):
+    pattern = re.escape(q.strip())
+    if not pattern:
+        return {"accounts": [], "users": []}
+    accounts = await db.accounts.find({"$or": [{"name": {"$regex": pattern, "$options": "i"}},
+                                               {"account_id": {"$regex": pattern, "$options": "i"}},
+                                               {"custom_domain": {"$regex": pattern, "$options": "i"}}]},
+                                      {"_id": 0, "account_id": 1, "name": 1, "type": 1, "status": 1}).limit(8).to_list(8)
+    users = await db.users.find({"$or": [{"name": {"$regex": pattern, "$options": "i"}},
+                                         {"email": {"$regex": pattern, "$options": "i"}}]},
+                                {"_id": 0, "user_id": 1, "name": 1, "email": 1, "role": 1, "account_id": 1}).limit(8).to_list(8)
+    return {"accounts": accounts, "users": users}
+
+
+@api.get("/admin/flags")
+async def admin_flags(admin=Depends(require_admin)):
+    current = await global_flags()
+    overrides = await db.accounts.find({"features": {"$ne": {}}}, {"_id": 0, "account_id": 1, "name": 1, "features": 1}).to_list(1000)
+    return {"is_staging": IS_STAGING, "flags": [
+        {**f, "enabled": current[f["key"]] and (IS_STAGING or not f.get("staging_only")),
+         "overrides": [{"account_id": a["account_id"], "name": a["name"], "enabled": a["features"][f["key"]]}
+                       for a in overrides if f["key"] in (a.get("features") or {})]}
+        for f in FEATURE_FLAGS]}
+
+
+@api.put("/admin/flags/{key}")
+async def set_flag(key: str, body: FlagPatch, admin=Depends(require_admin)):
+    if key not in FLAG_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown feature")
+    await db.feature_flags.update_one({"key": key}, {"$set": {"key": key, "enabled": body.enabled,
+                                                              "updated_by": admin["user_id"], "updated_at": iso()}},
+                                      upsert=True)
+    return await admin_flags(admin)
+
+
+async def require_account_admin(user=Depends(get_current_user)):
+    if user.get("account_role") != "account_admin" or not user.get("account_id"):
+        raise HTTPException(status_code=403, detail="Hospital admin access required")
+    return user
+
+
+@api.get("/account/overview")
+async def my_account_overview(user=Depends(require_account_admin)):
+    return await _account_overview(await get_account_or_404(user["account_id"]))
+
+
+@api.get("/account/users")
+async def my_account_users(kind: Optional[str] = None, q: Optional[str] = None, user=Depends(require_account_admin)):
+    return await _account_users(user["account_id"], kind, q, 200)
+
+
+class DemoRequestIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    email: str = Field(min_length=5, max_length=254)
+    organization: str = Field(min_length=2, max_length=160)
+    role: Optional[str] = Field(default=None, max_length=80)
+    message: Optional[str] = Field(default=None, max_length=1000)
+
+
+@api.post("/demo-requests")
+async def create_demo_request(body: DemoRequestIn, request: Request):
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", body.email.strip()):
+        raise HTTPException(status_code=422, detail="Enter a valid work email")
+    ip = client_ip(request)
+    if await db.demo_requests.count_documents({"ip": ip, "created_at": {"$gte": iso(now_utc() - timedelta(hours=1))}}) >= 5:
+        raise HTTPException(status_code=429, detail="Thanks — we already have your request.")
+    await db.demo_requests.insert_one({"request_id": f"demo_{uuid.uuid4().hex[:12]}", **body.model_dump(),
+                                       "email": body.email.strip().lower(), "ip": ip, "created_at": iso()})
+    return {"ok": True}
+
+
+@api.get("/admin/demo-requests")
+async def list_demo_requests(admin=Depends(require_admin)):
+    return await db.demo_requests.find({}, {"_id": 0, "ip": 0}).sort("created_at", -1).to_list(200)
+
+
+DEMO_ACCOUNTS = [
+    {"name": "Al Noor Specialist Hospital", "type": "hospital", "status": "subscribed", "city": "Riyadh",
+     "branding": {"display_name": "Al Noor Care", "primary_color": "#0F4C5C", "accent_color": "#E3B23C"},
+     "members": [("dr.layla@sihha.ai", "account_admin"), ("omar.patient@sihha.ai", "member"), ("noura.patient@sihha.ai", "member")]},
+    {"name": "Jeddah Family Clinics", "type": "clinic", "status": "trial", "city": "Jeddah", "branding": {}, "members": []},
+    {"name": "Eastern Health Group", "type": "hospital", "status": "subscribed", "city": "Dammam", "branding": {}, "members": []},
+]
+
+
+async def seed_demo_accounts():
+    """Staging-only sample hospital accounts so the super admin console has something to show."""
+    if await db.accounts.count_documents({}) > 0:
+        return
+    for demo in DEMO_ACCOUNTS:
+        account_id = await new_account_id()
+        await db.accounts.insert_one({"account_id": account_id, "name": demo["name"], "type": demo["type"],
+                                      "status": demo["status"], "city": demo["city"], "contact_email": None,
+                                      "branding": demo["branding"], "default_language": "ar", "custom_domain": None,
+                                      "domain_verified": False, "features": {"white_label": True} if demo["branding"] else {},
+                                      "sample": True, "created_by": "seed", "created_at": iso()})
+        for email, account_role in demo["members"]:
+            await db.users.update_one({"email": email, "account_id": {"$in": [None]}},
+                                      {"$set": {"account_id": account_id, "account_role": account_role}})
 
 
 app.include_router(api)

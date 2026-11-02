@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --brand-primary: 30 63 42;
+  --brand-accent: 177 216 183;
+  --env-bar: 0px;
+}
+
+#root { padding-top: var(--env-bar); }
+
 body {
   margin: 0;
   background: #fbfbf9;
@@ -28,7 +36,7 @@ h1, h2, h3, h4 {
   @apply bg-forest text-white rounded-full px-6 py-2.5 font-medium text-sm inline-flex items-center gap-2;
   transition: background-color 0.2s ease, transform 0.2s ease;
 }
-.btn-primary:hover { background-color: #2c5a3d; transform: translateY(-1px); }
+.btn-primary:hover { background-color: rgb(var(--brand-primary) / 0.88); transform: translateY(-1px); }
 .btn-primary:disabled { opacity: 0.5; pointer-events: none; }
 
 .btn-outline {

@@ -5,18 +5,20 @@ import { api } from "../lib/api";
 import { toast } from "sonner";
 import {
   LayoutDashboard, MessageSquare, ScanLine, Pill, Users,
-  Stethoscope, Bell, LogOut, Leaf, ChevronDown, Share2, Settings as SettingsIcon, CalendarDays, UserCheck, FileHeart, ShoppingBag, CalendarPlus, FileSignature,
+  Stethoscope, Bell, LogOut, ChevronDown, Share2, Settings as SettingsIcon, CalendarDays, ShieldCheck, Building2, FileHeart, ShoppingBag, CalendarPlus, FileSignature,
 } from "lucide-react";
+import { usePlatform } from "../context/PlatformContext";
+import { BrandMark } from "./BrandMark";
 
 const patientNav = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
-  { to: "/chat", label: "Health Chat", icon: MessageSquare, testid: "nav-chat" },
-  { to: "/pill-id", label: "Pill ID", icon: ScanLine, testid: "nav-pill-id" },
+  { to: "/chat", label: "Health Chat", icon: MessageSquare, testid: "nav-chat", flag: "health_chat" },
+  { to: "/pill-id", label: "Pill ID", icon: ScanLine, testid: "nav-pill-id", flag: "pill_id" },
   { to: "/medications", label: "Medications", icon: Pill, testid: "nav-medications" },
-  { to: "/book", label: "Book a Visit", icon: CalendarPlus, testid: "nav-book" },
-  { to: "/prescriptions", label: "Prescriptions", icon: FileSignature, testid: "nav-prescriptions" },
-  { to: "/visits", label: "Visit Summaries", icon: FileHeart, testid: "nav-visits" },
-  { to: "/pharmacy", label: "Pharmacy", icon: ShoppingBag, testid: "nav-pharmacy" },
+  { to: "/book", label: "Book a Visit", icon: CalendarPlus, testid: "nav-book", flag: "booking" },
+  { to: "/prescriptions", label: "Prescriptions", icon: FileSignature, testid: "nav-prescriptions", flag: "prescriptions" },
+  { to: "/visits", label: "Visit Summaries", icon: FileHeart, testid: "nav-visits", flag: "visit_summaries" },
+  { to: "/pharmacy", label: "Pharmacy", icon: ShoppingBag, testid: "nav-pharmacy", flag: "pharmacy_marketplace" },
   { to: "/dependents", label: "Dependents", icon: Users, testid: "nav-dependents" },
   { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
 ];
@@ -34,6 +36,9 @@ export default function Layout() {
   const [showAlerts, setShowAlerts] = useState(false);
   const [showProfiles, setShowProfiles] = useState(false);
   const navigate = useNavigate();
+  const { isOn, refreshFlags } = usePlatform();
+
+  useEffect(() => { refreshFlags(); }, [refreshFlags, user.account_id]);
 
   const loadAlerts = async () => {
     try {
@@ -76,15 +81,12 @@ export default function Layout() {
   return (
     <div className="min-h-screen bg-sand flex">
       {/* Sidebar */}
-      <aside className="w-60 shrink-0 border-r border-line bg-white flex flex-col fixed inset-y-0 z-20 hidden md:flex">
+      <aside className="w-60 shrink-0 border-r border-line bg-white flex-col fixed bottom-0 left-0 z-20 hidden md:flex" style={{ top: "var(--env-bar, 0px)" }}>
         <div className="px-6 py-6 flex items-center gap-2 border-b border-line">
-          <div className="h-9 w-9 rounded-full bg-forest flex items-center justify-center">
-            <Leaf className="h-5 w-5 text-sage" />
-          </div>
-          <span className="font-heading font-bold text-xl text-forest">Sihha AI</span>
+          <BrandMark testid="sidebar-brand" />
         </div>
         <nav className="flex-1 px-3 py-6 space-y-1">
-          {(user.role === "doctor" ? doctorNav : patientNav).map(({ to, label, icon: Icon, testid }) => (
+          {(user.role === "doctor" ? doctorNav : patientNav).filter((n) => !n.flag || isOn(n.flag)).map(({ to, label, icon: Icon, testid }) => (
             <NavLink
               key={to} to={to} end={to === "/doctor"} data-testid={testid}
               className={({ isActive }) =>
@@ -96,16 +98,24 @@ export default function Layout() {
               <Icon className="h-4 w-4" /> {label}
             </NavLink>
           ))}
-          {user.is_admin && (
+          {user.account_role === "account_admin" && (
             <NavLink
-              to="/admin/assignments" data-testid="nav-admin-assignments"
+              to="/my-hospital" data-testid="nav-my-hospital"
               className={({ isActive }) =>
                 `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium ${
                   isActive ? "bg-forest text-white" : "text-ink-soft hover:bg-sand"
                 }`
               }
             >
-              <UserCheck className="h-4 w-4" /> Assignments
+              <Building2 className="h-4 w-4" /> My Hospital
+            </NavLink>
+          )}
+          {user.is_admin && (
+            <NavLink
+              to="/admin/accounts" data-testid="nav-super-admin"
+              className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-ink-soft hover:bg-sand"
+            >
+              <ShieldCheck className="h-4 w-4" /> Super Admin
             </NavLink>
           )}
         </nav>
@@ -128,7 +138,7 @@ export default function Layout() {
 
       {/* Main */}
       <div className="flex-1 md:ml-60 flex flex-col min-h-screen">
-        <header className="sticky top-0 z-10 bg-white/90 backdrop-blur-md border-b border-line px-6 py-3 flex items-center justify-between">
+        <header className="sticky z-10 bg-white/90 backdrop-blur-md border-b border-line px-6 py-3 flex items-center justify-between" style={{ top: "var(--env-bar, 0px)" }}>
           {/* Profile switcher — dependents are a patient concept */}
           {user.role === "doctor" ? (
             <p className="text-sm font-medium text-ink-soft" data-testid="doctor-context-label">

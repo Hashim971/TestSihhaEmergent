@@ -7,6 +7,7 @@ import { MyDoctorCard } from "../components/MyDoctorCard";
 import { ClinicianProfileCard } from "../components/ClinicianProfileCard";
 import { AvailabilityCard } from "../components/AvailabilityCard";
 import { Save, User, HeartPulse, Pill, Leaf } from "lucide-react";
+import { InstallAppCard } from "../components/InstallAppCard";
 
 const EMPTY = {
   height: "", height_unit: "cm", weight: "", weight_unit: "kg",
@@ -68,6 +69,8 @@ export default function Settings() {
           <Save className="h-4 w-4" /> {saving ? "Saving…" : "Save Changes"}
         </button>
       </div>
+
+      <InstallAppCard />
 
       <div className="card p-6 flex items-center gap-4" data-testid="settings-account-card">
         <span className="h-12 w-12 rounded-full bg-sage text-forest flex items-center justify-center text-lg font-bold font-heading">

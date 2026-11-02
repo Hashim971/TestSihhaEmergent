@@ -1,0 +1,44 @@
+{
+  "summary": "Retested the iteration_13 security fixes (backend only). 7 pytest tests: 6 pass, 1 fails. That failure plus a manual probe found a critical new hole. Google lockout now gives 429 on attempt 11, keyed on the real client IP (google:35.193.209.116, not the 10.x proxy). Forgot-password timing is now similar (unknown ~1.1s vs existing ~0.83s; it was 0.65s vs 8s). Per-IP throttle works: after 10 requests, no new token rows are created and the reply stays generic. Old access and refresh cookies get 401 after a reset, and a fresh login works. Regression login, /me and /refresh work for omar and dr.layla. The ConfigurationError 503 handler is registered. CRITICAL NEW ISSUE: client_ip() trusts the first entry of X-Forwarded-For, which the client controls. Any client can send a different X-Forwarded-For value on each request and never hit the 5-attempt login lockout or the 10-attempt Google lockout. It can also dodge the per-IP forgot-password throttle. This is worse than before, when lockouts at least worked per email.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "client_ip() used by POST /api/auth/login, /api/auth/google/session, /api/auth/forgot-password",
+        "issue": "X-Forwarded-For[0] is client-controlled and the ingress passes it through. Probe 1: 8 bad passwords for one account, each with a different X-Forwarded-For (198.51.100.i), all returned 401 and none 429. There were 9 separate login_attempts rows such as '198.51.100.0:<email>'. Without the header, the 6th attempt returned 429 as expected. Probe 2: a Google request sent with X-Forwarded-For: 203.0.113.9 stored identifier 'google:203.0.113.9'. A spoofed X-Real-IP was ignored (the ingress overwrites it). A CF-Connecting-IP header from the client gets 403 at Cloudflare. Result: brute-force protection can be fully bypassed, and an attacker can lock out a victim's IP by spoofing it.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "token_predates_password_change",
+        "issue": "It compares iat (whole seconds) with int(password_changed_at). A token issued in the same second as the reset, just before it, still works. This is negligible but worth noting."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "passed_checks": [
+    "Google: 10 bad session ids returned 401 and the 11th returned 429. There was a single row keyed on the real public IP. The google:* rows were cleaned up (0 left).",
+    "Forgot-password timing: median for unknown emails ~1.05s, for an existing account ~0.83s. No side-channel.",
+    "Per-IP throttle: after 10 requests, the 11th and 12th requests for real accounts returned the generic 200 and created 0 token rows. The reset:* rows were cleaned up.",
+    "After a reset, the old session's /auth/me and /auth/refresh both returned 401. A new login, /me and refresh all worked. The reset user was restored to NewPass1 (verified by logging in).",
+    "Regression: omar.patient and dr.layla login, /auth/me and /auth/refresh all return 200 with the correct roles, and no password_hash is returned.",
+    "Code review: ConfigurationError has @app.exception_handler (503 service_unavailable). The email is sent in a background task kept in _background_tasks, and exceptions there are caught and logged."
+  ],
+  "test_report_links": ["/app/backend/tests/test_auth_security_iter14.py", "/app/test_reports/pytest/pytest_iter14.xml"],
+  "action_items": [
+    "Fix client_ip(): do not trust X-Forwarded-For[0]. Use the address the trusted ingress adds: the rightmost entry, or XFF[-N] for N trusted proxy hops. The ingress appears to overwrite X-Real-IP, so preferring X-Real-IP and ignoring XFF may be enough. Verify by logging the headers once.",
+    "Defense in depth: add a per-email lockout counter for /auth/login that does not depend on IP, so rotating IPs cannot brute-force a single account.",
+    "After fixing, re-run tests/test_auth_security_iter14.py. test_spoofed_header_bypass must pass."
+  ],
+  "critical_code_review_comments": [
+    "client_ip() takes CF-Connecting-IP > X-Real-IP > XFF[0] without checking for a trusted proxy. Every one of these is client-controlled unless the edge strips or overwrites it.",
+    "server.py is about 3,500 lines; split the auth code into its own module."
+  ],
+  "updated_files": ["/app/backend/tests/test_auth_security_iter14.py"],
+  "success_rate": {"backend": "86% (6/7); critical spoofing bypass found", "frontend": "skipped (not requested)"},
+  "seed_data_creation": "Temporary TEST users (test_ipthr_*, test_xff_*) were created and then deleted. No google:/reset: login_attempts rows remain. The noura and reset-user tokens were deleted. delivered+sihha-reset@resend.dev is back on NewPass1.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run pytest tests/test_auth_security_iter14.py (about 100s). It cleans up after itself. The real client IP seen by the backend is 35.193.209.116. Sending X-Forwarded-For from the client spoofs the key; X-Real-IP from the client is overwritten. Do not call live transcription.",
+  "rca of the issue": "The ingress appends the real IP to any X-Forwarded-For the client sends, and client_ip() reads the leftmost (client-supplied) entry. Repro: POST /api/auth/login with a wrong password 6+ times, each with header 'X-Forwarded-For: 198.51.100.<i>'. It never returns 429. Fix: read the trusted hop (X-Real-IP or the rightmost XFF entry) and add an IP-independent per-email lock."
+}

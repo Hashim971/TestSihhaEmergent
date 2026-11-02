@@ -3,6 +3,8 @@ import { useNavigate, Navigate, Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { Leaf, Mail, Lock, User, LogIn, UserPlus, Stethoscope } from "lucide-react";
+import { BrandMark } from "../components/BrandMark";
+import { usePlatform } from "../context/PlatformContext";
 
 function formatApiErrorDetail(detail) {
   if (detail == null) return "Something went wrong. Please try again.";
@@ -15,6 +17,7 @@ function formatApiErrorDetail(detail) {
 
 export default function Auth({ portal = "patient" }) {
   const { user, loading, setUser } = useAuth();
+  const { tenant } = usePlatform();
   const [mode, setMode] = useState("login");
 
   // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
@@ -46,7 +49,7 @@ export default function Auth({ portal = "patient" }) {
       }
       const payload = mode === "login"
         ? { email: form.email, password: form.password }
-        : { name: form.name, email: form.email, password: form.password };
+        : { name: form.name, email: form.email, password: form.password, tenant_account_id: tenant?.account_id };
       const { data } = await api.post(`/auth/${mode === "login" ? "login" : "register"}`, payload);
 
       if (isDoctorPortal && data.role !== "doctor") {
@@ -90,12 +93,7 @@ export default function Auth({ portal = "patient" }) {
     <div className="min-h-screen bg-sand flex items-center justify-center px-6">
       <div className="w-full max-w-md fade-up">
         <Link to="/" className="flex items-center justify-center gap-2 mb-8" data-testid="auth-logo-link">
-          <div className="h-10 w-10 rounded-full bg-forest flex items-center justify-center">
-            {isDoctorPortal ? <Stethoscope className="h-5 w-5 text-sage" /> : <Leaf className="h-5 w-5 text-sage" />}
-          </div>
-          <span className="font-heading font-bold text-2xl text-forest">
-            Sihha AI{isDoctorPortal ? " for Clinicians" : ""}
-          </span>
+          <BrandMark size="lg" suffix={isDoctorPortal ? " for Clinicians" : ""} testid="auth-brand" />
         </Link>
 
         <div className="card p-8" data-testid={isDoctorPortal ? "doctor-auth-card" : "patient-auth-card"}>

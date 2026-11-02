@@ -6,9 +6,9 @@ module.exports = {
       colors: {
         sand: "#FBFBF9",
         surface: "#FFFFFF",
-        forest: "#1E3F2A",
-        "forest-hover": "#2C5A3D",
-        sage: "#B1D8B7",
+        forest: "rgb(var(--brand-primary) / <alpha-value>)",
+        "forest-hover": "rgb(var(--brand-primary) / 0.85)",
+        sage: "rgb(var(--brand-accent) / <alpha-value>)",
         terracotta: "#E06D53",
         ink: "#1A1A1A",
         "ink-soft": "#525252",

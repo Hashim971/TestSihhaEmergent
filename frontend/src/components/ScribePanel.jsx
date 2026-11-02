@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { toast } from "sonner";
 import { Mic, Square, ShieldCheck, AlertTriangle, FileText } from "lucide-react";
 import { PatientSummaryPanel } from "./PatientSummaryPanel";
+import { usePlatform } from "../context/PlatformContext";
 
 const CONSENT_TEXT =
   "The patient has been told this consultation will be recorded to draft a clinical note, that the recording is " +
@@ -12,6 +13,7 @@ const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 
 const LIVE_SLICE_MS = 10000;
 
 export function ScribePanel({ encounterId }) {
+  const { isOn } = usePlatform();
   const [state, setState] = useState(null);
   const [checked, setChecked] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -103,7 +105,7 @@ export function ScribePanel({ encounterId }) {
       setLiveLines([]);
       setLiveStatus("");
       liveOffset.current = 0;
-      liveActive.current = true;
+      liveActive.current = isOn("live_transcript");
       startSlice(stream);
       setRecording(true);
       setElapsed(0);
@@ -240,7 +242,7 @@ export function ScribePanel({ encounterId }) {
         </div>
       )}
 
-      {(recording || (busy && liveLines.length > 0)) && (
+      {(recording || (busy && liveLines.length > 0)) && isOn("live_transcript") && (
         <div className="mt-4 border border-line rounded-xl bg-sand/60" data-testid="live-transcript">
           <div className="flex items-center justify-between px-4 py-2 border-b border-line">
             <span className="text-[10px] uppercase tracking-[0.15em] text-ink-soft font-semibold">Live transcript</span>

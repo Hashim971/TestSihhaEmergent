@@ -1,99 +1,116 @@
 {
-  "theme": "Light theme preferred. Medical applications require high trust, cleanliness, and clear readability. The 'Organic & Earthy' archetype is chosen to create a reassuring, grounded experience avoiding clinical sterility.",
-  "typography": {
-    "headings": {
-      "fontFamily": "Outfit, sans-serif",
-      "weights": ["400", "500", "700"],
-      "strategy": "Approachable yet authoritative. Use tracking-tight for all headings. DO NOT use generic sans like Inter for headings."
-    },
-    "body": {
-      "fontFamily": "IBM Plex Sans, sans-serif",
-      "weights": ["400", "500", "600"],
-      "strategy": "High legibility, especially optimized for biometric data, charts, numbers, and medical reports."
-    },
-    "scale": {
-      "h1": "text-4xl md:text-5xl lg:text-6xl tracking-tight leading-none",
-      "h2": "text-2xl md:text-3xl lg:text-4xl tracking-tight",
-      "h3": "text-xl md:text-2xl",
-      "body": "text-base leading-relaxed",
-      "labels": "text-xs uppercase tracking-[0.2em]"
-    }
+  "brand": {
+    "name": "Sihha AI (صحة الذكاء الاصطناعي)",
+    "tagline": "The Premier Arabic-First AI Healthcare Ecosystem for Saudi Arabia",
+    "market": "Saudi Arabia (KSA) - Patients, Doctors, Clinics, Enterprise Hospitals",
+    "archetype": "Organic & Earthy with Saudi Clinical Authority",
+    "emotional_tone": "Authoritative, serene, deeply trusted, state-of-the-art Arabic medical intelligence"
   },
-  "colors": {
-    "archetype": "Organic & Earthy (Trust, Calm, Clarity)",
+  "color_system": {
     "palette": {
-      "background": "#FBFBF9",
-      "surface": "#FFFFFF",
-      "primary": "#1E3F2A",
-      "primaryHover": "#2C5A3D",
-      "accent": "#B1D8B7",
-      "alert": "#E06D53",
-      "textPrimary": "#1A1A1A",
-      "textSecondary": "#525252",
-      "border": "#E5E4E2"
+      "bg_sand": "#FAF8F5",
+      "bg_sand_card": "#FFFFFF",
+      "bg_sand_subtle": "#F4F0EA",
+      "forest_primary": "#143425",
+      "forest_hover": "#1A4431",
+      "forest_active": "#0E251A",
+      "sage_light": "#EAF0ED",
+      "sage_accent": "#8FA89B",
+      "terracotta_accent": "#C85A32",
+      "terracotta_soft": "#FDF3F0",
+      "ink_dark": "#1A201C",
+      "ink_muted": "#4A554E",
+      "line_border": "#E2E8E4",
+      "line_border_dark": "#C5D1C9",
+      "staging_amber": "#D97706",
+      "staging_amber_bg": "#FEF3C7",
+      "staging_dark_bar": "#0F172A"
     },
-    "strategy": "Avoid standard 'SaaS blue' or clinical sterile palettes. Ground the user with warm sand tones and deep forest green. Use terracotta for missed dose alerts or critical vitals."
-  },
-  "visual_enhancers": {
-    "surfaces": "Flat Solid surfaces. NO glassmorphism for health data to prevent visual refraction of crucial medical information. Use crisp 1px borders (border-[#E5E4E2]) with subtle ambient shadows (shadow-sm).",
-    "borders": "Rounded-xl for main data cards, pill-shaped (rounded-full) for primary call-to-action buttons. Ensure concentric nested radii.",
-    "icons": "lucide-react for standard dashboard navigation, dependents avatars, and actions. NEVER use emojis as icons.",
-    "header": "Solid or semi-solid background (e.g., bg-white/90 backdrop-blur-md) with border-b. CRITICAL: DO NOT use complete transparent background in header or overlays."
-  },
-  "grids_and_layouts": {
-    "dashboard": "High Density Grid (grid-cols-1 md:grid-cols-3 lg:grid-cols-4) for Doctor Portal and Patient Dashboard. Tight gaps (gap-4 or gap-6). Span primary charts across 2-3 columns.",
-    "landing": "Bento Grid Protocol. Asymmetrical, grid-cols-1 md:grid-cols-12 with wide gaps (gap-8) for marketing sections.",
-    "spacing": "Generous Spacing Philosophy. Use p-6 or p-8 inside cards to avoid text collision and provide breathing room."
-  },
-  "motion": {
-    "interactions": "Hover states on all interactive elements (e.g., translate-y-[-2px], shadow-md, darken background).",
-    "transitions": "Use specific properties (transition: transform 0.2s ease, opacity 0.2s ease). CRITICAL: DO NOT use 'transition: all'.",
-    "chat": "Smooth staggered entrance for AI Health Chat messages. Typing indicator animations.",
-    "accessibility": "Respect prefers-reduced-motion."
-  },
-  "accessibility": {
-    "contrast": "APCA contrast calculator standards. Minimum 4.5:1 for normal text.",
-    "testing": "All interactive and key informational elements MUST include a data-testid attribute (e.g., data-testid='upload-pill-btn', data-testid='login-submit-button').",
-    "forms": "Clear error states and high-contrast focus rings (focus:ring-2 focus:ring-primary focus:ring-offset-2)."
-  },
-  "components": {
-    "general": "Use .js and .jsx files for all components. Rely on Shadcn UI primitives customized via Tailwind.",
-    "chat_interface": "Custom implementation leveraging Shadcn ScrollArea. Stream UI for AI medical advice with a prominent 'Download Report' button.",
-    "pill_identification": "Drag-and-drop zone for photo upload. Card overlay to display AI-identified pill details and instructions.",
-    "charts": "Shadcn Chart / Recharts for biometric trend charts. Ensure color-blind-friendly palettes for data lines.",
-    "toasts": "Use Sonner (located at /app/src/components/ui/sonner.js if applicable) for missed dose alerts and dose confirmations.",
-    "calendars": "Shadcn Calendar for Medication schedule and adherence tracking.",
-    "dependents_management": "Avatar lists and profile cards with clear hierarchy for switching active patient profiles."
-  },
-  "media": {
-    "strategy": "Use real human moments for the landing page, clean high-contrast UI for the medical portal.",
-    "image_urls": {
-      "hero_landing": {
-        "url": "https://images.unsplash.com/photo-1666886573531-48d2e3c2b684?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTJ8MHwxfHNlYXJjaHwzfHxtb2Rlcm4lMjBoZWFsdGhjYXJlJTIwcGF0aWVudCUyMGRvY3RvcnxlbnwwfHx8fDE3ODQyMzQyNzZ8MA&ixlib=rb-4.1.0&q=85",
-        "description": "Doctor showing a patient something on the tablet - representing modern AI healthcare integration for the landing page."
-      },
-      "pill_placeholder": {
-        "url": "https://images.unsplash.com/photo-1607874963930-2edecc67a25a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNDR8MHwxfHNlYXJjaHwxfHxtZWRpY2luZSUyMHBpbGxzJTIwb24lMjBoYW5kfGVufDB8fHx8MTc4NDIzNDI3Nnww&ixlib=rb-4.1.0&q=85",
-        "description": "Pills on hand - to be used as a visual placeholder or background for the pill identification upload feature."
-      }
+    "rules": {
+      "text_contrast": "Ensure minimum 4.5:1 contrast ratio. Primary text on light background MUST be ink_dark (#1A201C). Never use grey on grey.",
+      "hover_contrast": "Always explicitly define hover text colors. Button primary: bg-forest_primary text-white hover:bg-forest_hover hover:text-white.",
+      "focus_states": "focus:outline-none focus:ring-2 focus:ring-sage_accent focus:border-forest_primary",
+      "gradient_limit": "Strictly limited gradients under 15%. Rely on solid warm surfaces with refined borders."
     }
+  },
+  "typography": {
+    "font_family_heading": "IBM Plex Sans Arabic, Tajawal, Outfit, serif/sans-serif",
+    "font_family_body": "IBM Plex Sans Arabic, Inter, sans-serif",
+    "font_family_mono": "JetBrains Mono, SFMono-Regular, monospace",
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-forest_primary leading-tight",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl font-semibold tracking-tight text-ink_dark",
+      "h3": "text-xl sm:text-2xl font-semibold text-ink_dark",
+      "h4": "text-lg sm:text-xl font-medium text-ink_dark",
+      "body": "text-base leading-relaxed text-ink_muted",
+      "small_label": "text-xs font-semibold uppercase tracking-wider text-sage_accent"
+    }
+  },
+  "layout_and_spacing": {
+    "spacing_scale": "Tailwind standard (p-4, p-6, p-8, p-12, p-16, p-24)",
+    "container_padding": "Internal padding p-6 or p-8 for bordered cards to eliminate text collision",
+    "border_radius": "Rounded-xl for cards (12px), rounded-full for pills, rounded-md for admin form elements",
+    "bento_grid": "3-column responsive layout for features, asymmetrical 12-column grid for hero and showcase"
+  },
+  "components_and_patterns": {
+    "staging_environment": {
+      "banner": "Top persistent bar with slate-900 background, warning badge 'STAGING TEST ENVIRONMENT (NOT PRODUCTION)', account switcher quick action, and feature flag test trigger.",
+      "data_testid": "staging-persistent-bar"
+    },
+    "landing_page": {
+      "hero": {
+        "headline": "Saudi Arabia’s Arabic-First AI Healthcare Operating System",
+        "subheadline": "Empowering patients with 24/7 AI triage & pill ID, supporting clinicians with live Arabic AI scribe & SOAP notes, and unifying hospital networks.",
+        "ctas": ["Book Enterprise Demo", "Explore Patient Portal"],
+        "hero_image": "https://images.unsplash.com/photo-1666214280391-8ff5bd3c0bf0?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTZ8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjBob3NwaXRhbCUyMG1lZGljYWwlMjBsYWIlMjBBSSUyMHNvZnR3YXJlfGVufDB8fHx8MTc5MzYxMDAxNXww&ixlib=rb-4.1.0&q=85"
+      },
+      "sections": [
+        "Hero Section with Arabic/English dual pill toggle & Trust Badges (MOH, SFDA, PDPL Compliant)",
+        "Key Audience Tabs: Patients (Pill ID & AI Chat), Doctors (Live Arabic Scribe & Visit Notes), Hospitals (White-Label & Workflow)",
+        "Live AI Scribe Interactive Proof Screen (Arabic Audio waveform + instant structured SOAP note generation)",
+        "White-Label Plug & Play Showcase for Hospitals (Brand color picker live preview, custom domain setup, logo uploader)",
+        "Pharmacy Marketplace & Pill Identification Scanner Demo Card",
+        "Investor & Enterprise Traction Metrics (99.4% Arabic Medical Dialect Accuracy, <30s Triage, 4.9/5 Clinical Satisfaction)",
+        "Regulatory & Compliance Guarantee (Saudi Data & AI Authority SDAIA, SFDA Class II AI, PDPL Law 2024)",
+        "Footer with Quick Nav, Staging Link, Language Selector, and Enterprise Contact Form"
+      ]
+    },
+    "deliverect_super_admin": {
+      "inspiration": "Deliverect Admin UI pattern",
+      "key_elements": [
+        "Left Sidebar with Account Switcher dropdown: Shows current account name + MONOSPACE ID chip (e.g., 'ACC-98421') + 'RECENT ACCOUNTS' search filter",
+        "Quick Nav Search Input: Header search bar for super admins to instantly search any account by name, ID, domain, or email",
+        "Accounts List Screen: Header with 'Filter' toggle button, Name / Account Type dropdown filters, 'Showing 25 of 4,705 Accounts' counter badge",
+        "Account Table Rows: Account name, Status badge ('Subscribed' green, 'Trial' amber, 'Suspended' red), Type badge ('Self-serve' / 'Enterprise White-label'), 'X Locations X Users' meta, Monospace ID box with 1-click copy, Edit action, 'Switch to account >' link",
+        "Users Management Screen: 'Search by name or email' input, Table with Name, Email, Locations, Role dropdown selector, 'Invite User' modal",
+        "Account Detail Workspace (8 Tabs): Overview (Customer & Staff metrics), Users, Customers, White-Label Branding (Logo upload, Brand color swatches, Live preview card), Feature Flags (Account-specific overrides), Domain & Language (Arabic/English default, custom CNAME), Import Data (CSV uploader), Onboarding Checklist"
+      ]
+    },
+    "feature_flags": {
+      "global_flags": [
+        {"id": "ai_scribe_live_transcription", "label": "Live Arabic Audio AI Clinical Scribe", "default": true},
+        {"id": "pill_id_camera_scan", "label": "Pill Vision Identification Engine", "default": true},
+        {"id": "pharmacy_marketplace", "label": "Integrated Pharmacy Marketplace & Instant Delivery", "default": true},
+        {"id": "white_label_portal", "label": "Hospital Custom Branding & CNAME Domain", "default": false},
+        {"id": "sfda_drug_interaction_warning", "label": "SFDA Drug-Drug Interaction Safety Checks", "default": true},
+        {"id": "whatsapp_visit_reminders", "label": "Saudi WhatsApp Appointment Reminders", "default": true}
+      ]
+    },
+    "mobile_pwa": {
+      "banner": "Installable Browser App Card with 1-click PWA trigger, iOS Safari & Android Chrome installation guide, preview screen frame."
+    }
+  },
+  "image_urls": {
+    "hero_hospital_tech": "https://images.unsplash.com/photo-1666214280391-8ff5bd3c0bf0?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTZ8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjBob3NwaXRhbCUyMG1lZGljYWwlMjBsYWIlMjBBSSUyMHNvZnR3YXJlfGVufDB8fHx8MTc5MzYxMDAxNXww&ixlib=rb-4.1.0&q=85",
+    "doctor_consultation_tablet": "https://images.unsplash.com/photo-1758691463000-08b98131daf3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwxfHxkb2N0b3IlMjBjb25zdWx0YXRpb24lMjBzdGV0aG9zY29wZSUyMHRhYmxldHxlbnwwfHx8fDE3OTM2MTAwMTl8MA&ixlib=rb-4.1.0&q=85",
+    "doctor_desk_stethoscope": "https://images.unsplash.com/photo-1758691461916-dc7894eb8f94?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwzfHxkb2N0b3IlMjBjb25zdWx0YXRpb24lMjBzdGV0aG9zY29wZSUyMHRhYmxldHxlbnwwfHx8fDE3OTM2MTAwMTl8MA&ixlib=rb-4.1.0&q=85",
+    "pill_pharmacy_detail": "https://images.unsplash.com/photo-1607619056574-7b8d3ee536b2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2ODl8MHwxfHNlYXJjaHwxfHxtZWRpY2F0aW9uJTIwcGlsbHMlMjBwaGFybWFjeSUyMGxhYnxlbnwwfHx8fDE3OTM2MTAwMTh8MA&ixlib=rb-4.1.0&q=85"
   },
   "instructions_to_main_agent": [
-    "You have .js files, NOT .tsx files. Write all frontend logic using modern Javascript (ES6+) and React JSX.",
-    "Prioritize using pre-existing components from src/components/ui before building custom ones.",
-    "Build the dashboard using Recharts for vitals and biometric trends. Layout data densely but clearly.",
-    "For the AI Chat, ensure clear distinction between User and AI messages, and include an option to 'Download Report'.",
-    "Implement the doctor portal with data tables showing patient alerts and adherence reports.",
-    "Adhere strictly to the 'Organic & Earthy' color palette. DO NOT fallback to default Tailwind/Vercel styling.",
-    "Ensure all interactive elements have data-testid attributes for testing."
-  ],
-  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
-    "Do not converge toward generic AI slop. Create layered depth with appropriate styling.",
-    "Never use dark colors as gradients. Keep surfaces solid and grounded.",
-    "Never apply universal transitions (transition: all). Use specific properties.",
-    "Do not center align the app container (.App { text-align: center; }). It disrupts reading flow.",
-    "Never use AI emojis (🤖🧠) for icons. Use lucide-react exclusively for vector iconography.",
-    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
-    "Ensure every header, dropdown, or overlay has a solid or blurred background. NEVER use complete transparent backgrounds over content."
+    "Use data-testid attributes on all interactive elements (buttons, inputs, cards, dropdowns, table rows).",
+    "Keep styling aligned with the existing Sand/Forest/Sage/Terracotta visual system.",
+    "Implement the persistent STAGING environment top bar cleanly without hiding main navigation.",
+    "Deliverect-style Super Admin UI must feature account search by name or ID, recent accounts list, account switcher ID chip, status badges, and 8-tab account detailed settings.",
+    "Landing Page must look investor-ready with trust badges, live interactive proof widgets, white-label preview simulator, compliance disclosures, and dual Arabic/English locale toggle."
   ]
 }
