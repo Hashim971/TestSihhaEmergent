@@ -404,11 +404,13 @@ def _app_origin(request: Request) -> str:
     return next(o for o in CORS_ORIGINS if o.startswith("https://"))
 
 
-async def _deliver_reset_email(user_id: str, email: str, subject: str, html: str):
+async def _deliver_reset_email(user_id: str, email: str, subject: str, html: str, kind: str = "email") -> bool:
     try:
         await send_email(to=email, subject=subject, html=html)
+        return True
     except Exception:
-        logging.getLogger(__name__).warning("Password reset email not delivered for %s", user_id)
+        logging.getLogger(__name__).warning("%s not delivered to %s (%s)", kind.capitalize(), email, user_id)
+        return False
 
 
 @api.post("/auth/forgot-password")
@@ -4265,14 +4267,17 @@ async def send_monthly_reports():
     origin = next(o for o in CORS_ORIGINS if o.startswith("https://"))
     month = _report_period(None)[0].strftime("%Y-%m")
     period = _report_period(None)[0].strftime("%B %Y")
-    for account in await db.accounts.find({"status": {"$ne": "suspended"}}, ACCOUNT_PROJECTION).to_list(10000):
+    for account in await db.accounts.find({"status": {"$ne": "suspended"}, "last_report_sent": {"$ne": month}},
+                                          ACCOUNT_PROJECTION).to_list(10000):
         name = (account.get("branding") or {}).get("display_name") or account["name"]
         admins = await db.users.find({"account_id": account["account_id"], "account_role": "account_admin",
                                       "password_hash": {"$exists": True}}, {"_id": 0, "user_id": 1, "name": 1, "email": 1}).to_list(50)
+        sent = 0
         for a in admins:
             subject, html = usage_report_email(a["name"], name, period, f"{origin}/my-hospital?report={month}")
-            await _deliver_reset_email(a["user_id"], a["email"], subject, html)
-        await db.accounts.update_one({"account_id": account["account_id"]}, {"$set": {"last_report_sent": month}})
+            sent += await _deliver_reset_email(a["user_id"], a["email"], subject, html, kind="usage report")
+        if sent:
+            await db.accounts.update_one({"account_id": account["account_id"]}, {"$set": {"last_report_sent": month}})
 
 
 @api.post("/cron/monthly-reports")

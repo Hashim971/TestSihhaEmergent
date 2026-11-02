@@ -201,7 +201,7 @@ export default function Layout() {
                 )}
               </button>
               {showAlerts && (
-                <div className="absolute right-0 mt-2 w-80 bg-white border border-line rounded-xl shadow-md p-2 z-30 max-h-96 overflow-y-auto" data-testid="alerts-panel">
+                <div className="fixed inset-x-4 sm:absolute sm:inset-x-auto sm:end-0 mt-2 sm:w-80 bg-white border border-line rounded-xl shadow-md p-2 z-30 max-h-96 overflow-y-auto" data-testid="alerts-panel">
                   <p className="px-3 py-2 text-xs uppercase tracking-[0.2em] text-ink-soft">Alerts</p>
                   {alerts.length === 0 && <p className="px-3 py-4 text-sm text-ink-soft">No alerts yet.</p>}
                   {alerts.map((a) => (

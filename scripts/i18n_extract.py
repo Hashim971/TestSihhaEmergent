@@ -8,9 +8,11 @@ OUT = pathlib.Path("/app/frontend/src/i18n/strings_en.json")
 
 JSX_TEXT = re.compile(r">\s*([^<>{}`]*[A-Za-z][^<>{}`]*?)\s*<")
 ATTR = re.compile(r'\b(?:placeholder|title|aria-label|alt)="([^"{}]*[A-Za-z][^"{}]*)"')
-KEYED = re.compile(r'\b(?:label|desc|description|title|headline|sub|message|text|reason|empty)\s*:\s*"([^"]*[A-Za-z][^"]*)"')
+KEYED = re.compile(r'\b(?:label|desc|description|title|headline|sub|message|text|reason|empty)["\']?\s*:\s*"([^"]*[A-Za-z][^"]*)"')
 CALLS = re.compile(r'(?:toast\.(?:success|error|info|warning)|setError|setStatus|setLiveStatus|errorText\([^,]*,)\s*\(?\s*"([^"]*[A-Za-z][^"]*)"')
 TERNARY = re.compile(r'\?\s*"([^"]*[A-Za-z ][^"]*)"\s*:\s*"([^"]*[A-Za-z ][^"]*)"')
+FRAGMENT = re.compile(r"[>}]([^<>{}]*[A-Za-z][^<>{}]*)[<{]")
+QUOTED = re.compile(r'"([A-Z][a-z][^"]{1,200}?)"')
 ARRAY_PAIR = re.compile(r'\[\s*"[a-z_#/]+"\s*,\s*"([^"]*[A-Za-z][^"]*)"\s*\]')
 
 
@@ -26,11 +28,12 @@ def keep(s: str) -> bool:
 
 
 strings = set()
-for path in list(SRC.rglob("*.jsx")) + list(SRC.rglob("*.js")):
+for path in list(SRC.rglob("*.jsx")) + list(SRC.rglob("*.js")) + [pathlib.Path("/app/backend/server.py")]:
     if "i18n" in path.parts:
         continue
     code = path.read_text(encoding="utf-8")
-    for rx in (JSX_TEXT, ATTR, KEYED, CALLS, ARRAY_PAIR):
+    rxs = (KEYED, QUOTED) if path.suffix == ".py" else (JSX_TEXT, ATTR, KEYED, CALLS, ARRAY_PAIR, FRAGMENT, QUOTED)
+    for rx in rxs:
         for m in rx.finditer(code):
             s = " ".join(m.group(1).split())
             if keep(s):

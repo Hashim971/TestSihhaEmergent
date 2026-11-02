@@ -1,0 +1,58 @@
+{
+  "summary": "Iteration 17 tested demo inbox and alert email, usage report PDFs, cron endpoints, Arabic/RTL mode, the mobile project files and regression. Backend: 15/15 new pytest pass (test_iter17_demo_report_cron.py) and 26/26 iter15+16 regression pass. Demo inbox: create, list, PATCH status and notes all persist; invalid status gives 422, non-admin 403, unknown id 404. Alert email GET/PUT works (invalid email 422). The demo alert to delivered+sihha-demo@resend.dev sent with no failure in the log. PDFs: admin and account report return %PDF with an attachment header; month 2026-13 gives 422, unknown account 404, layla on the admin endpoint 403, omar on /account/report 403. Cron: missing, wrong or non-Bearer auth gives 401; the correct bearer gives 200 {accepted:true}; the same X-Webhook-Id twice leaves a single db.cron_runs row; after a run every non-suspended account has last_report_sent=2026-10. crons.yml is valid and has been applied (crontab rendered in .emergent/cron/webhook-crons). The mobile folder has all files plus the android/ folder, and the workflow YAML parses with android (assembleDebug + upload-artifact) and ios-simulator jobs. Frontend: demo inbox UI works (status badge updates, notes save, filter chips, reload persists, alert save). Report download works from my-hospital (?report=2026-10 pre-fills) and from the account workspace (filename usage-report-YYYY-MM.pdf). Arabic: every toggle (landing/auth/auth-shell/app/admin) switches dir=rtl and lang=ar, saves sihha_lang, survives reload, and switches back to English without a reload. Sidebar moves right, main content is not hidden, no horizontal overflow at 390px on landing or patient pages, inputs accept typing, adding a medication shows an Arabic toast, no page errors. Patient pages are mostly translated. There are notable English gaps on the doctor dashboard, encounter detail, demo requests page, My Hospital/workspace overview and the medication form labels. Regression: login, all 8 workspace tabs, and tenant preview branding (Al Noor Care) work.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "send_monthly_reports", "issue": "last_report_sent is set even when every admin email fails to send. There is no per-month dedupe, so two runs with different run_ids in the same month email admins twice. Consider checking last_report_sent == month before sending."},
+      {"endpoint": "_deliver_reset_email (reused for demo alerts and usage reports)", "issue": "On failure it logs 'Password reset email not delivered for demo_alert', which is misleading. The 'blocked before sending' Resend error does not include the recipient, so failures are hard to trace. Log the email kind and recipient."},
+      {"endpoint": "uvicorn reload", "issue": "WatchFiles reloads the backend when files under backend/tests change. That can kill in-flight background tasks (e.g. a monthly-report run) while tests are being edited."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Alerts panel (mobile RTL)", "issue": "At 390px in Arabic the alerts panel spans x=88 to 408, overflowing the viewport by about 18px. Text is clipped ('Nahdi', 'prescription for'). The RTL override turns .right-0 into left:0, so it anchors to the bell's left and extends right.", "selector": "[data-testid='alerts-panel']", "priority": "MEDIUM"},
+      {"component": "DemoRequests alert settings", "issue": "Toasts (top-right) cover demo-alert-email-input and demo-alert-save-btn for several seconds after Save. Retrying straight after an invalid-email error is blocked (Playwright confirmed the toast intercepts pointer events).", "selector": "[data-testid='demo-alert-save-btn']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Arabic coverage gaps (main English text in Arabic mode)", "issues": [
+        "Doctor dashboard /doctor: 62 English vs 16 Arabic text nodes. Untranslated: 'Good day,', MY PATIENTS / VISITS THIS WEEK / BRIEFINGS TO WRITE / AWAITING SIGNATURE, 'Today, Monday, November 2', every empty state ('No visits booked for today.', 'Nothing else booked this week.', 'No drafts waiting on you.', 'No outstanding intake questionnaires.'), alert group labels ('screenings needing attention', 'medication alerts', 'TRIAGE · CRITICAL').",
+        "Encounter detail: section descriptions ('Generate a questionnaire tailored to this patient's record', 'The patient's own words, structured...'), 'Stale · N days old', 'AI-drafted clinical note — for clinician review. Transcript quality:', 'unclear passages need your acknowledgement before signing', 'affects', CHIEF COMPLAINT / HISTORY OF PRESENTING ILLNESS labels.",
+        "Super Admin Demo requests page: title, nav item 'Demo requests', 'EMAIL ME NEW REQUESTS', filter chips (All/New/Contacted/Demo booked/Won/Lost), status select options and badges are all English. Strings from this new page are missing from ar.json.",
+        "Accounts list: 'Subscribed'/'Trial' badges stay English (probably CSS-capitalised raw values, so the case-sensitive lookup misses), 'Staff', and a garbled mixed string 'جارٍ العرض 3 of 3 accounts'. Sidebar 'Choose an account' is English.",
+        "My Hospital / workspace overview: 'Usage report (PDF)', VISITS, AI SCREENINGS, IMPORTED RECORDS, 'in the last 30 days', 'doctors · hospital admins', 'patient history brought in by CSV', most onboarding checklist items; 'Clinician workspace' header label.",
+        "Medication form: labels 'Times (comma separated)', 'Instructions', 'Units in pack', 'Units per dose', 'Dispensed on' stay English, while Name and Dosage are translated.",
+        "Patient header profile switcher 'Me' and 'N taken · N missed' on adherence stay English. Alert messages are stored server-side in English, so the alerts panel is English.",
+        "Landing: 'Consent-based sharing', 'Doctor-in-the-loop AI', 'Arabic & English' trust chips, the security cards ('Brute-force and account-enumeration protection...', 'Separate staging environment...'), and the demo-sent confirmation ('Thanks, X.' / 'We'll reach out at ...') stay English."
+      ]},
+      {"screen": "RTL general", "issues": [
+        "Sonner Toaster is fixed at position='top-right'. In RTL it covers the sidebar brand. Consider top-left when dir=rtl.",
+        "Arabic toast text in headless Chromium renders with disconnected letters (likely a font fallback on the toast). Check on a real device and set the Arabic font-family on [data-sonner-toast].",
+        "Super admin sidebar account switcher in RTL truncates from the wrong side ('...cialist Hospital'), and the small status pill overlaps the label.",
+        "Mixed-direction numeric strings render out of order in RTL ('in the last 30 days 0', 'taken · 50 missed 530'). Wrap the numbers or use translated templates.",
+        "Super-admin mobile top nav has only Accounts/Switches. There is no mobile link to Demo requests or Doctor assignments.",
+        "ReportDownload uses a native <input type='month'> browser picker rather than the shadcn component (acceptable, but it is inconsistent)."
+      ]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter17_demo_report_cron.py", "/app/test_reports/pytest/iter17.xml"],
+  "action_items": [
+    "Fix the alerts panel position in RTL on mobile (anchor so it stays inside the viewport at 390px)",
+    "Add the missing Arabic dictionary entries for the Demo requests page, doctor dashboard, encounter detail, My Hospital/workspace overview KPIs and onboarding checklist, medication form labels, the 'Clinician workspace' label, and landing trust chips/security cards",
+    "Translate status values (Subscribed/Trial, demo statuses) through t() rather than relying on the DOM lookup of CSS-capitalised raw values",
+    "Optional: guard monthly reports with last_report_sent == month to avoid duplicate sends, and fix the misleading email-failure log message",
+    "Optional: move the Toaster to top-left in RTL, and make sure toasts don't cover the demo-alert save button"
+  ],
+  "critical_code_review_comments": [
+    "The LanguageContext DOM translator matches exact text-node strings. Any text built from interpolated values or CSS text-transform (uppercase/capitalize on raw values) won't be found. Status/enum labels and templated numeric strings need explicit t() calls.",
+    "The MutationObserver watches all of document.body (subtree, characterData, attributes). That is fine at current scale, but long lists (doctor schedule: 143 text nodes) are re-walked on every React update.",
+    "ReportDownload calls URL.revokeObjectURL right after a.click(). This can cancel the download in Safari/Firefox; revoke it in a setTimeout instead.",
+    "send_monthly_reports sends emails one after another with no concurrency limit and stamps last_report_sent no matter what was delivered."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter17_demo_report_cron.py"],
+  "success_rate": {"backend": "100% (41/41 incl. regression)", "frontend": "~88% (functional flows all pass; Arabic coverage gaps and 1 mobile RTL overflow bug)"},
+  "seed_data_creation": "Demo alert email is now set to delivered+sihha-demo@resend.dev. TEST_ demo requests, the TEST_ArMed medication and TEST_ cron_runs rows were cleaned up. All accounts have last_report_sent=2026-10 from the cron test.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run pytest tests/test_iter17_demo_report_cron.py with REACT_APP_BACKEND_URL exported. The Al Noor id is ACC-12AFFE. Use the in-page text-node counter (English vs Arabic nodes inside <main>) to re-check Arabic coverage on /doctor, /doctor/encounters/enc_773ddb4169b4, /admin/demo-requests, /my-hospital and /medications (form open). The browser tool rewrites screenshot paths that contain f-string expressions, so use fixed names. localStorage sihha_lang was left as 'en'."
+}

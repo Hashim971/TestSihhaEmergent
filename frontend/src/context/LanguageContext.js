@@ -7,11 +7,19 @@ const KEY = "sihha_lang";
 const ATTRS = ["placeholder", "title", "aria-label", "alt"];
 const SKIP = "script,style,textarea,code,[data-no-translate]";
 
+const lower = Object.fromEntries(Object.entries(ar).map(([k, v]) => [k.toLowerCase(), v]));
+const EDGE = /^([\s·•:,.()\-–—+]*)(.*?)([\s·•:,.()\-–—]*)$/s;
+
+const find = (s) => ar[s] || lower[s.toLowerCase()];
+
 const lookup = (english) => {
   const trimmed = english.replace(/\s+/g, " ").trim();
-  const hit = trimmed && ar[trimmed];
-  if (!hit) return null;
-  return english.match(/^\s*/)[0] + hit + english.match(/\s*$/)[0];
+  if (!trimmed || !/[A-Za-z]/.test(trimmed)) return null;
+  const direct = find(trimmed);
+  if (direct) return english.match(/^\s*/)[0] + direct + english.match(/\s*$/)[0];
+  const [, lead, core, trail] = english.match(EDGE);
+  const hit = core && find(core.replace(/\s+/g, " "));
+  return hit ? lead + hit + trail : null;
 };
 
 function translateText(node, lang) {
@@ -89,7 +97,7 @@ export function LanguageProvider({ children }) {
     return () => observer.disconnect();
   }, [lang]);
 
-  const t = useCallback((s) => (lang === "ar" && ar[s]) || s, [lang]);
+  const t = useCallback((s) => (lang === "ar" && find(s)) || s, [lang]);
 
   return <LangContext.Provider value={{ lang, setLang, t }}>{children}</LangContext.Provider>;
 }

@@ -29,7 +29,7 @@ import MyHospital from "./pages/MyHospital";
 import { PlatformProvider } from "./context/PlatformContext";
 import { StagingBar } from "./components/StagingBar";
 import { FeatureRoute } from "./components/FeatureRoute";
-import { LanguageProvider } from "./context/LanguageContext";
+import { LanguageProvider, useLang } from "./context/LanguageContext";
 import DemoRequests from "./pages/admin/DemoRequests";
 import Intake from "./pages/Intake";
 import EncounterDetail from "./pages/EncounterDetail";
@@ -48,12 +48,17 @@ export default function App() {
           <StagingBar />
           <AppRouter />
           <ServiceUnavailable />
-          <Toaster position="top-right" richColors />
+          <LocalizedToaster />
         </AuthProvider>
         </LanguageProvider>
       </PlatformProvider>
     </BrowserRouter>
   );
+}
+
+function LocalizedToaster() {
+  const { lang } = useLang();
+  return <Toaster position={lang === "ar" ? "bottom-left" : "bottom-right"} richColors dir={lang === "ar" ? "rtl" : "ltr"} />;
 }
 
 function AppRouter() {
