@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, Navigate, Outlet } from "react-router-dom";
-import { Store, Inbox, Megaphone, LogOut, Clock, XCircle } from "lucide-react";
+import { Store, Inbox, Megaphone, LogOut, Clock, XCircle, Package } from "lucide-react";
 import { api } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { LanguageToggle } from "../../components/LanguageToggle";
@@ -25,8 +25,9 @@ export default function PortalLayout() {
             <p className="text-[10px] uppercase tracking-[0.15em] text-ink-soft">{user.name} · {me.pharmacy_role || "pending"}</p>
           </div>
           {me.status === "approved" && (
-            <nav className="flex gap-1 order-last sm:order-none w-full sm:w-auto sm:ms-6">
+            <nav className="flex gap-1 order-last sm:order-none w-full sm:w-auto sm:ms-6 overflow-x-auto">
               <NavLink to="/pharmacy-portal" end className={tab} data-testid="portal-nav-orders"><Inbox className="h-4 w-4" /> Orders</NavLink>
+              <NavLink to="/pharmacy-portal/products" className={tab} data-testid="portal-nav-products"><Package className="h-4 w-4" /> Products</NavLink>
               <NavLink to="/pharmacy-portal/sponsorship" className={tab} data-testid="portal-nav-sponsorship"><Megaphone className="h-4 w-4" /> Sponsorship</NavLink>
             </nav>
           )}

@@ -25,7 +25,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout, ConfigurationError
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from cryptography.fernet import Fernet
 from typing import Optional, List, Any
 
@@ -1617,7 +1617,7 @@ async def update_encounter(encounter_id: str, body: EncounterUpdate, user=Depend
         await db.alerts.insert_one({
             "alert_id": f"alert_{uuid.uuid4().hex[:12]}", "user_id": enc["patient_user_id"],
             "profile_id": enc.get("profile_id") or enc["patient_user_id"], "type": "rating_request", "severity": "info",
-            "message": f"How was your visit with {user['name']}? Rate {hospital} from Your visits.",
+            "message": f"How was your visit with {user['name']}? Rate {hospital} under Your recent visits on your dashboard.",
             "encounter_id": encounter_id, "read": False, "created_at": iso(),
         })
     return await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})

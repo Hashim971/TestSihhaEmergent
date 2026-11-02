@@ -7,8 +7,9 @@ import { OverviewTab } from "../components/admin/OverviewTab";
 import { PeopleTab } from "../components/admin/PeopleTab";
 import { IdChip } from "../components/admin/ui";
 import { ListingTab } from "../components/admin/ListingTab";
+import { RatingsTab } from "../components/admin/RatingsTab";
 
-const TABS = [["overview", "Overview"], ["staff", "Staff"], ["customers", "Customers"], ["listing", "App listing"]];
+const TABS = [["overview", "Overview"], ["staff", "Staff"], ["customers", "Customers"], ["listing", "App listing"], ["ratings", "Ratings"]];
 
 export default function MyHospital() {
   const { user } = useAuth();
@@ -35,6 +36,7 @@ export default function MyHospital() {
         ))}
       </div>
       {tab === "overview" && <OverviewTab overview={overview} />}
+      {tab === "ratings" && <RatingsTab listUrl="/account/ratings" patchUrl={(id) => `/account/ratings/${id}`} />}
       {tab === "listing" && <ListingTab account={overview.account} save={(patch) => api.patch("/account/listing", patch)} />}
       {(tab === "staff" || tab === "customers") && <PeopleTab key={tab} accountId={overview.account.account_id} kind={tab} readOnly base="/account/users" />}
     </div>

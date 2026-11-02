@@ -15,6 +15,7 @@ import { ImportTab } from "../../components/admin/ImportTab";
 import { OnboardingTab } from "../../components/admin/OnboardingTab";
 import { ReportDownload } from "../../components/admin/ReportDownload";
 import { ListingTab } from "../../components/admin/ListingTab";
+import { RatingsTab } from "../../components/admin/RatingsTab";
 
 const TABS = [
   { key: "overview", label: "Overview" },
@@ -23,6 +24,7 @@ const TABS = [
   { key: "branding", label: "Branding", staging: true },
   { key: "features", label: "Features" },
   { key: "listing", label: "App listing" },
+  { key: "ratings", label: "Ratings" },
   { key: "domain", label: "Domain & language", staging: true },
   { key: "import", label: "Import data", staging: true },
   { key: "onboarding", label: "Onboarding" },
@@ -104,6 +106,7 @@ export default function AccountWorkspace() {
       {(tab === "staff" || tab === "customers") && <PeopleTab key={tab} accountId={account.account_id} kind={tab} initialQuery={params.get("q") || ""} />}
       {tab === "branding" && env.is_staging && <BrandingTab account={account} onSaved={onSaved} />}
       {tab === "features" && <FeaturesTab account={account} onSaved={onSaved} isStaging={env.is_staging} />}
+      {tab === "ratings" && <RatingsTab listUrl={`/admin/accounts/${accountId}/ratings`} patchUrl={(id) => `/admin/ratings/${id}`} />}
       {tab === "listing" && <ListingTab account={account} save={async (patch) => onSaved((await api.patch(`/admin/accounts/${accountId}`, patch)).data)} />}
       {tab === "domain" && env.is_staging && <DomainTab account={account} onSaved={onSaved} />}
       {tab === "import" && env.is_staging && <ImportTab account={account} onDone={load} />}

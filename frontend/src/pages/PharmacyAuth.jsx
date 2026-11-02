@@ -16,7 +16,7 @@ export default function PharmacyAuth() {
   const { user, loading, setUser } = useAuth();
   const navigate = useNavigate();
   const [mode, setMode] = useState("login");
-  const [form, setForm] = useState({ email: "", password: "", name: "", pharmacy_name: "", city: "", sfda_license: "", phone: "" });
+  const [form, setForm] = useState({ email: "", password: "", name: "", pharmacy_name: "", city: "", sfda_license: "", moh_license: "", cr_number: "", phone: "" });
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [applied, setApplied] = useState(false);
@@ -90,6 +90,10 @@ export default function PharmacyAuth() {
                 <div className="grid grid-cols-2 gap-3">
                   {F({ k: "city", label: "City" })}
                   {F({ k: "sfda_license", label: "SFDA licence no." })}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {F({ k: "moh_license", label: "MOH licence no." })}
+                  {F({ k: "cr_number", label: "CR number" })}
                 </div>
                 {F({ k: "name", label: "Your name" })}
                 {F({ k: "phone", label: "Phone", required: false })}

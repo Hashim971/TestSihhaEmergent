@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Building2, MapPin, Search, Stethoscope, CheckCircle2, ArrowRight } from "lucide-react";
+import { Building2, MapPin, Search, Stethoscope, CheckCircle2, ArrowRight, Award } from "lucide-react";
 import { api } from "../lib/api";
+import { Stars } from "../components/RecentVisits";
+import { HospitalReviews } from "../components/HospitalReviews";
 
 export default function FindCare() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const [hospitals, setHospitals] = useState(null);
+  const [reviewing, setReviewing] = useState(null);
   const [filters, setFilters] = useState({ q: "", city: "", specialty: "" });
   const reportId = params.get("report");
   const suggested = params.get("specialty");
@@ -59,17 +62,18 @@ export default function FindCare() {
         </div>
       )}
 
+      {reviewing && <HospitalReviews hospital={reviewing} onClose={() => setReviewing(null)} />}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {(hospitals || []).map((h, i) => <HospitalCard key={h.account_id} h={h} onOpen={() => open(h)} delay={i * 60} />)}
+        {(hospitals || []).map((h, i) => <HospitalCard key={h.account_id} h={h} onOpen={() => open(h)} onReviews={() => setReviewing(h)} delay={i * 60} />)}
       </div>
     </div>
   );
 }
 
-function HospitalCard({ h, onOpen, delay }) {
+function HospitalCard({ h, onOpen, onReviews, delay }) {
   return (
-    <button onClick={onOpen} data-testid={`hospital-card-${h.account_id}`} style={{ animationDelay: `${delay}ms`, transition: "box-shadow 0.2s ease, transform 0.2s ease" }}
-      className="card p-6 text-start fade-up hover:shadow-md hover:-translate-y-0.5 flex flex-col gap-3">
+    <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => e.key === "Enter" && onOpen()} data-testid={`hospital-card-${h.account_id}`} style={{ animationDelay: `${delay}ms`, transition: "box-shadow 0.2s ease, transform 0.2s ease" }}
+      className="card p-6 text-start fade-up hover:shadow-md hover:-translate-y-0.5 flex flex-col gap-3 cursor-pointer">
       <div className="flex items-start gap-3">
         <span className="h-11 w-11 rounded-xl flex items-center justify-center shrink-0 text-white font-bold" style={{ background: h.primary_color || "#1F4D3A" }}>
           {h.logo_url ? <img src={`${process.env.REACT_APP_BACKEND_URL}${h.logo_url}`} alt="" className="h-11 w-11 rounded-xl object-cover" /> : h.name.charAt(0)}
@@ -84,6 +88,10 @@ function HospitalCard({ h, onOpen, delay }) {
             )}
           </p>
           <p className="text-xs text-ink-soft mt-0.5 flex items-center gap-1"><MapPin className="h-3 w-3" /> {h.city || "City not listed"} · {h.type === "clinic" ? "Clinic" : "Hospital"}</p>
+          <button onClick={(e) => { e.stopPropagation(); onReviews(); }} className="mt-1 inline-flex items-center gap-1.5 text-xs hover:underline" data-testid={`hospital-rating-${h.account_id}`}>
+            {h.rating_count ? <><Stars value={h.rating_avg} size="h-3.5 w-3.5" /> <bdi className="font-semibold">{h.rating_avg}</bdi> <span className="text-ink-soft">(<bdi>{h.rating_count}</bdi>)</span></> : <span className="text-ink-soft">No ratings yet</span>}
+          </button>
+          {h.top_rated && <span className="ms-2 text-[10px] uppercase tracking-wider bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full inline-flex items-center gap-1" data-testid={`top-rated-${h.account_id}`}><Award className="h-3 w-3" /> Top rated</span>}
         </div>
       </div>
       {h.about && <p className="text-sm text-ink-soft line-clamp-2">{h.about}</p>}
@@ -96,6 +104,6 @@ function HospitalCard({ h, onOpen, delay }) {
         </span>
         <span className="text-sm font-semibold text-forest flex items-center gap-1">See doctors <ArrowRight className="h-4 w-4 rtl:rotate-180" /></span>
       </div>
-    </button>
+    </div>
   );
 }

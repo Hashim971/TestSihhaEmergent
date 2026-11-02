@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { HeartPulse, Droplets, Thermometer, Wind, Gauge, Plus, Zap, ClipboardList } from "lucide-react";
 import { Link } from "react-router-dom";
+import { VitalTrends } from "../components/VitalTrends";
+import { RecentVisits } from "../components/RecentVisits";
 
 const vitalCards = [
   { key: "heart_rate", label: "Heart Rate", unit: "bpm", icon: HeartPulse },
@@ -18,6 +20,7 @@ export default function Dashboard() {
   const { activeProfile } = useAuth();
   const [latest, setLatest] = useState({});
   const [vitals, setVitals] = useState([]);
+  const [trends, setTrends] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ heart_rate: "", systolic: "", diastolic: "", glucose: "", spo2: "", temperature: "" });
   const [simulating, setSimulating] = useState(false);
@@ -34,11 +37,13 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     const pid = activeProfile.id;
-    const [l, v] = await Promise.all([
+    const [l, v, t] = await Promise.all([
       api.get("/vitals/latest", { params: { profile_id: pid } }),
       api.get("/vitals", { params: { profile_id: pid, days: 7 } }),
+      api.get("/vitals/trends", { params: { profile_id: pid } }).catch(() => ({ data: null })),
     ]);
     setLatest(l.data);
+    setTrends(t.data);
     setVitals(v.data.map((d) => ({ ...d, t: new Date(d.recorded_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) })));
   }, [activeProfile.id]);
 
@@ -156,10 +161,13 @@ export default function Dashboard() {
         })}
       </div>
 
+      <VitalTrends data={trends} />
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <ChartCard title="Heart Rate Trend" data={vitals} dataKey="heart_rate" color="#1E3F2A" testid="chart-heart-rate" />
         <ChartCard title="Blood Glucose Trend" data={vitals} dataKey="glucose" color="#E06D53" testid="chart-glucose" />
       </div>
+      <RecentVisits />
     </div>
   );
 }

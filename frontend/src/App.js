@@ -43,6 +43,7 @@ import PharmacyAuth from "./pages/PharmacyAuth";
 import PortalLayout from "./pages/pharmacy-portal/PortalLayout";
 import PortalOrders from "./pages/pharmacy-portal/PortalOrders";
 import PortalSponsorship from "./pages/pharmacy-portal/PortalSponsorship";
+import PortalProducts from "./pages/pharmacy-portal/PortalProducts";
 import AdminPharmacies from "./pages/admin/Pharmacies";
 
 export default function App() {
@@ -81,6 +82,7 @@ function AppRouter() {
           <Route element={<ProtectedRoute><PortalLayout /></ProtectedRoute>}>
             <Route path="/pharmacy-portal" element={<PortalOrders />} />
             <Route path="/pharmacy-portal/sponsorship" element={<PortalSponsorship />} />
+            <Route path="/pharmacy-portal/products" element={<PortalProducts />} />
           </Route>
           <Route path="/auth/forgot" element={<ForgotPassword />} />
           <Route path="/auth/reset" element={<ResetPassword />} />

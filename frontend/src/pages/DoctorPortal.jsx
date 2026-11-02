@@ -3,12 +3,15 @@ import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { Stethoscope, Bell, FileText, Pill, ChevronLeft } from "lucide-react";
+import { VitalTrends } from "../components/VitalTrends";
+import { VitalLimitsEditor } from "../components/VitalLimitsEditor";
 
 export default function DoctorPortal() {
   const { user } = useAuth();
   const [patients, setPatients] = useState([]);
   const [selected, setSelected] = useState(null);
   const [summary, setSummary] = useState(null);
+  const [trends, setTrends] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
@@ -25,8 +28,12 @@ export default function DoctorPortal() {
     setSelected(p);
     setLoading(true);
     try {
-      const res = await api.get(`/doctor/patients/${p.user_id}/summary`);
+      const [res, tr] = await Promise.all([
+        api.get(`/doctor/patients/${p.user_id}/summary`),
+        api.get(`/doctor/patients/${p.user_id}/vital-trends`).catch(() => ({ data: null })),
+      ]);
       setSummary(res.data);
+      setTrends(tr.data);
     } finally {
       setLoading(false);
     }
@@ -63,6 +70,11 @@ export default function DoctorPortal() {
           <StatCard label="Active Medications" value={summary.medications.length} sub={summary.medications.map((m) => m.name).join(", ") || "None"} />
           <StatCard label="Screening Reports" value={summary.reports.length} sub="AI-generated health screenings" />
         </div>
+
+        {trends && (
+          <VitalTrends data={trends} testid="doctor-vital-trends"
+            footer={<VitalLimitsEditor key={selected.user_id} patientId={selected.user_id} data={trends} onChange={setTrends} />} />
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="card p-6">
