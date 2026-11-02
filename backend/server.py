@@ -727,6 +727,109 @@ async def check_vital_alerts(user_id, profile, vital):
             })
 
 
+# ---------- Vitals trend warnings ----------
+TREND_METRICS = {
+    "systolic": {"label": "Systolic blood pressure", "unit": "mmHg", "max": 140, "min": 90, "step": 5},
+    "diastolic": {"label": "Diastolic blood pressure", "unit": "mmHg", "max": 90, "min": 60, "step": 4},
+    "glucose": {"label": "Blood sugar", "unit": "mg/dL", "max": 126, "min": 70, "step": 10},
+}
+TREND_SEVERITY = {"above_limit": "warning", "below_limit": "warning", "rising": "info", "falling": "info", "ok": None}
+
+
+class VitalLimitsIn(BaseModel):
+    systolic_max: Optional[float] = Field(default=None, ge=100, le=200)
+    systolic_min: Optional[float] = Field(default=None, ge=70, le=120)
+    diastolic_max: Optional[float] = Field(default=None, ge=60, le=130)
+    diastolic_min: Optional[float] = Field(default=None, ge=40, le=80)
+    glucose_max: Optional[float] = Field(default=None, ge=90, le=300)
+    glucose_min: Optional[float] = Field(default=None, ge=40, le=110)
+    note: str = Field(default="", max_length=300)
+
+
+def _avg(values):
+    return round(sum(values) / len(values), 1) if values else None
+
+
+def _trend_status(spec: dict, limit: dict, last3: list, recent_avg, change):
+    label, unit = spec["label"], spec["unit"]
+    high = sum(1 for v in last3 if v > limit["max"])
+    low = sum(1 for v in last3 if v < limit["min"])
+    if len(last3) >= 2 and high >= 2:
+        return "above_limit", f"{label} was above {limit['max']:g} {unit} in {high} of your last {len(last3)} readings."
+    if len(last3) >= 2 and low >= 2:
+        return "below_limit", f"{label} was below {limit['min']:g} {unit} in {low} of your last {len(last3)} readings."
+    if change is not None and change >= spec["step"] and recent_avg >= limit["max"] - 2 * spec["step"]:
+        return "rising", f"{label} is trending up: {recent_avg:g} {unit} on average this week, up {change:g} from last week."
+    if change is not None and change <= -spec["step"] and recent_avg <= limit["min"] + spec["step"]:
+        return "falling", f"{label} is trending down: {recent_avg:g} {unit} on average this week, down {abs(change):g} from last week."
+    return "ok", f"{label} is within your limits."
+
+
+async def compute_vital_trends(profile_id: str) -> dict:
+    doc = await db.vital_limits.find_one({"profile_id": profile_id}, {"_id": 0}) or {}
+    rows = await db.vitals.find({"profile_id": profile_id, "recorded_at": {"$gte": iso(now_utc() - timedelta(days=14))}},
+                                {"_id": 0}).sort("recorded_at", 1).to_list(3000)
+    mid = iso(now_utc() - timedelta(days=7))
+    trends = []
+    for metric, spec in TREND_METRICS.items():
+        limit = {"max": doc.get(f"{metric}_max") or spec["max"], "min": doc.get(f"{metric}_min") or spec["min"]}
+        source = "doctor" if doc.get(f"{metric}_max") or doc.get(f"{metric}_min") else "standard"
+        points = [(r["recorded_at"], r[metric]) for r in rows if r.get(metric) is not None]
+        recent_avg = _avg([v for t, v in points if t >= mid])
+        previous_avg = _avg([v for t, v in points if t < mid])
+        change = round(recent_avg - previous_avg, 1) if recent_avg is not None and previous_avg is not None else None
+        status, message = _trend_status(spec, limit, [v for _, v in points[-3:]], recent_avg, change)
+        trends.append({
+            "metric": metric, "label": spec["label"], "unit": spec["unit"], "limit": limit, "limit_source": source,
+            "recent_avg": recent_avg, "previous_avg": previous_avg, "change": change, "status": status,
+            "severity": TREND_SEVERITY[status], "message": message if points else f"No {spec['label'].lower()} readings in the last 14 days.",
+            "readings": len(points), "series": [{"at": t, "value": v} for t, v in points[-30:]],
+        })
+    return {"trends": trends, "limits": {k: v for k, v in doc.items() if k != "profile_id"} or None}
+
+
+async def notify_vital_trends(user: dict, profile_id: str):
+    """Alert + email once per metric and status per 24h, to the patient and their doctor."""
+    result = await compute_vital_trends(profile_id)
+    flagged = [t for t in result["trends"] if t["status"] != "ok"]
+    if not flagged:
+        return
+    doctor = None
+    if profile_id == user["user_id"] and user.get("assigned_doctor_user_id"):
+        doctor = await db.users.find_one({"user_id": user["assigned_doctor_user_id"]}, {"_id": 0, "user_id": 1, "email": 1, "name": 1})
+    subject_name = user.get("name") or "Patient"
+    if profile_id != user["user_id"]:
+        dep = await db.dependents.find_one({"dependent_id": profile_id}, {"_id": 0, "name": 1})
+        subject_name = (dep or {}).get("name") or "your dependent"
+    origin = next(o for o in CORS_ORIGINS if o.startswith("https://"))
+    for t in flagged:
+        key = {"profile_id": profile_id, "metric": t["metric"], "status": t["status"]}
+        if await db.vital_trend_notices.find_one({**key, "sent_at": {"$gte": iso(now_utc() - timedelta(hours=24))}}):
+            continue
+        await db.vital_trend_notices.update_one(key, {"$set": {**key, "sent_at": iso()}}, upsert=True)
+        await db.alerts.insert_one({
+            "alert_id": f"alert_{uuid.uuid4().hex[:12]}", "user_id": user["user_id"], "profile_id": profile_id,
+            "type": "vital_trend", "severity": t["severity"], "metric": t["metric"],
+            "message": t["message"] if profile_id == user["user_id"] else f"{subject_name}: {t['message']}",
+            "read": False, "created_at": iso(),
+        })
+        headline = f"{t['label']} needs attention"
+        if user.get("email"):
+            subject, html = notice_email(user.get("name") or "there", headline,
+                                         f"{t['message']} If you feel unwell, contact your doctor or call 997 in an emergency.",
+                                         f"{origin}/dashboard", "See my vitals")
+            _send_in_background(user["user_id"], user["email"], subject, html)
+        if doctor and doctor.get("email"):
+            subject, html = notice_email(doctor.get("name") or "Doctor", f"{subject_name}: {headline}",
+                                         t["message"].replace("your last", "their last"), f"{origin}/doctor/patients", "Open patient")
+            _send_in_background(doctor["user_id"], doctor["email"], subject, html)
+
+
+@api.get("/vitals/trends")
+async def my_vital_trends(profile_id: Optional[str] = None, user=Depends(get_current_user)):
+    return await compute_vital_trends(profile_key(user, profile_id))
+
+
 @api.post("/vitals")
 async def add_vital(body: VitalCreate, user=Depends(get_current_user)):
     profile = profile_key(user, body.profile_id)
@@ -741,6 +844,7 @@ async def add_vital(body: VitalCreate, user=Depends(get_current_user)):
     })
     await db.vitals.insert_one(vital)
     await check_vital_alerts(user["user_id"], profile, vital)
+    await notify_vital_trends(user, profile)
     vital.pop("_id", None)
     return vital
 
@@ -797,6 +901,7 @@ async def simulate_vitals(body: dict = None, user=Depends(get_current_user)):
         await db.vitals.insert_many(docs)
         last = dict(docs[-1])
         await check_vital_alerts(user["user_id"], profile, last)
+        await notify_vital_trends(user, profile)
     return {"inserted": len(docs)}
 
 
@@ -1502,8 +1607,19 @@ async def update_encounter(encounter_id: str, body: EncounterUpdate, user=Depend
             update["started_at"] = iso()
         if update["status"] == "completed":
             update["ended_at"] = iso()
+            if user.get("account_id"):
+                update["account_id"] = user["account_id"]
     update["updated_at"] = iso()
     await db.encounters.update_one({"encounter_id": encounter_id}, {"$set": update})
+    if update.get("status") == "completed" and enc["status"] != "completed" and user.get("account_id"):
+        account = await db.accounts.find_one({"account_id": user["account_id"]}, {"_id": 0, "name": 1, "branding": 1})
+        hospital = ((account or {}).get("branding") or {}).get("display_name") or (account or {}).get("name") or "the hospital"
+        await db.alerts.insert_one({
+            "alert_id": f"alert_{uuid.uuid4().hex[:12]}", "user_id": enc["patient_user_id"],
+            "profile_id": enc.get("profile_id") or enc["patient_user_id"], "type": "rating_request", "severity": "info",
+            "message": f"How was your visit with {user['name']}? Rate {hospital} from Your visits.",
+            "encounter_id": encounter_id, "read": False, "created_at": iso(),
+        })
     return await db.encounters.find_one({"encounter_id": encounter_id}, {"_id": 0})
 
 
@@ -3296,10 +3412,14 @@ async def my_visits(user=Depends(get_current_user)):
                                     ).sort("scheduled_at", -1).to_list(50)
     doctors = {d["user_id"]: d for d in await db.users.find(
         {"user_id": {"$in": list({r["doctor_user_id"] for r in rows})}},
-        {"_id": 0, "user_id": 1, "name": 1, "specialty": 1, "clinic": 1, "city": 1, "clinic_phone": 1},
+        {"_id": 0, "user_id": 1, "name": 1, "specialty": 1, "clinic": 1, "city": 1, "clinic_phone": 1, "account_id": 1},
     ).to_list(100)} if rows else {}
+    ratings = {r["encounter_id"]: r for r in await db.hospital_ratings.find(
+        {"encounter_id": {"$in": [r["encounter_id"] for r in rows]}}, {"_id": 0, "patient_user_id": 0}).to_list(100)} if rows else {}
     for row in rows:
         row["doctor"] = doctors.get(row["doctor_user_id"])
+        row["my_rating"] = ratings.get(row["encounter_id"])
+        row["can_rate"] = row["status"] == "completed" and bool(row.get("account_id") or (row["doctor"] or {}).get("account_id"))
     upcoming = [r for r in rows if r["status"] in ("scheduled", "in_progress")
                 and r["scheduled_at"] >= iso()]
     upcoming.sort(key=lambda r: r["scheduled_at"])
@@ -4371,7 +4491,16 @@ async def _hospital_cards(query: dict) -> List[dict]:
                                   {"_id": 0, "user_id": 1, "account_id": 1, "specialty": 1}).to_list(5000)
     published = {a["doctor_user_id"] for a in await db.doctor_availability.find(
         {"weekly": {"$ne": []}}, {"_id": 0, "doctor_user_id": 1}).to_list(5000)}
-    return [_hospital_card(a, [d for d in doctors if d["account_id"] == a["account_id"]], published) for a in accounts]
+    stats = await _rating_stats(ids)
+    cards = []
+    for a in accounts:
+        card = _hospital_card(a, [d for d in doctors if d["account_id"] == a["account_id"]], published)
+        st = stats.get(a["account_id"])
+        card.update(rating_avg=round(st["sum"] / st["n"], 1) if st else None, rating_count=st["n"] if st else 0,
+                    trust_score=round(_trust_score(st), 3))
+        card["top_rated"] = card["rating_count"] >= 3 and card["rating_avg"] >= 4.5
+        cards.append(card)
+    return cards
 
 
 @api.get("/care/hospitals")
@@ -4390,7 +4519,7 @@ async def list_hospitals(q: Optional[str] = None, city: Optional[str] = None, sp
     mine = user.get("account_id")
     for c in cards:
         c["is_my_hospital"] = c["account_id"] == mine
-    cards.sort(key=lambda c: (not c["is_my_hospital"], -c["bookable_doctor_count"], c["name"]))
+    cards.sort(key=lambda c: (not c["is_my_hospital"], -c["trust_score"], -c["bookable_doctor_count"], c["name"]))
     return cards
 
 
@@ -4480,6 +4609,8 @@ class PharmacyApplyIn(BaseModel):
     pharmacy_name: str = Field(min_length=2, max_length=120)
     city: str = Field(min_length=2, max_length=80)
     sfda_license: str = Field(min_length=3, max_length=60)
+    moh_license: str = Field(min_length=3, max_length=60)
+    cr_number: str = Field(min_length=3, max_length=60)
     phone: str = Field(default="", max_length=30)
     name: str = Field(min_length=1, max_length=120)
     email: str = Field(min_length=3, max_length=254)
@@ -4558,7 +4689,8 @@ async def apply_as_pharmacy(body: PharmacyApplyIn, request: Request):
     application = {
         "application_id": f"papp_{uuid.uuid4().hex[:12]}", "user_id": user_id, "email": email,
         "contact_name": body.name.strip(), "pharmacy_name": body.pharmacy_name.strip(), "city": body.city.strip(),
-        "sfda_license": body.sfda_license.strip(), "phone": body.phone.strip(), "status": "pending",
+        "sfda_license": body.sfda_license.strip(), "moh_license": body.moh_license.strip(),
+        "cr_number": body.cr_number.strip(), "phone": body.phone.strip(), "status": "pending",
         "created_at": iso(),
     }
     await db.pharmacy_applications.insert_one(dict(application))
@@ -4813,7 +4945,8 @@ async def approve_pharmacy(application_id: str, request: Request, admin=Depends(
     pharmacy_id = f"ph_{uuid.uuid4().hex[:10]}"
     await db.pharmacies.insert_one({
         "pharmacy_id": pharmacy_id, "name_en": application["pharmacy_name"], "name_ar": application["pharmacy_name"],
-        "sfda_license": application["sfda_license"], "moh_license": None, "cr_number": None,
+        "sfda_license": application["sfda_license"], "moh_license": application.get("moh_license"),
+        "cr_number": application.get("cr_number"),
         "fulfilment_mode": "in_app", "handoff_url_template": None,
         "sponsorship": {"tier": None, "rank": None, "active_until": None},
         "branches": [{"branch_id": f"br_{uuid.uuid4().hex[:8]}", "city": application["city"], "lat": None, "lng": None,
@@ -4877,6 +5010,301 @@ async def decline_sponsorship(request_id: str, body: ReasonIn, admin=Depends(req
         raise HTTPException(status_code=409, detail="This request is not waiting for payment")
     return {"ok": True}
 
+
+
+
+# ---------- Doctor: vitals trend limits ----------
+@api.get("/doctor/patients/{patient_id}/vital-trends")
+async def doctor_vital_trends(patient_id: str, user=Depends(require_doctor)):
+    await assert_doctor_can_access_patient(db, user, patient_id)
+    return await compute_vital_trends(patient_id)
+
+
+@api.put("/doctor/patients/{patient_id}/vital-limits")
+async def set_vital_limits(patient_id: str, body: VitalLimitsIn, user=Depends(require_doctor)):
+    await assert_doctor_can_access_patient(db, user, patient_id)
+    values = body.model_dump()
+    for metric in TREND_METRICS:
+        lo, hi = values.get(f"{metric}_min"), values.get(f"{metric}_max")
+        if lo is not None and hi is not None and lo >= hi:
+            raise HTTPException(status_code=422, detail=f"The lower {metric} limit must be below the upper one")
+    await db.vital_limits.update_one({"profile_id": patient_id}, {"$set": {
+        **values, "profile_id": patient_id, "set_by": user["user_id"], "set_by_name": user["name"], "updated_at": iso()}},
+        upsert=True)
+    return await compute_vital_trends(patient_id)
+
+
+@api.delete("/doctor/patients/{patient_id}/vital-limits")
+async def reset_vital_limits(patient_id: str, user=Depends(require_doctor)):
+    await assert_doctor_can_access_patient(db, user, patient_id)
+    await db.vital_limits.delete_one({"profile_id": patient_id})
+    return await compute_vital_trends(patient_id)
+
+# ---------- Hospital ratings ----------
+RATING_PRIOR_MEAN, RATING_PRIOR_WEIGHT = 3.5, 3
+
+
+class RatingIn(BaseModel):
+    stars: int = Field(ge=1, le=5)
+    comment: str = Field(default="", max_length=500)
+
+
+class RatingVisibilityIn(BaseModel):
+    hidden: bool
+
+
+def _public_name(name: str) -> str:
+    parts = (name or "Patient").split()
+    return parts[0] + (f" {parts[-1][0]}." if len(parts) > 1 else "")
+
+
+async def _rating_stats(account_ids: List[str]) -> dict:
+    rows = await db.hospital_ratings.aggregate([
+        {"$match": {"account_id": {"$in": account_ids}, "hidden": False}},
+        {"$group": {"_id": "$account_id", "sum": {"$sum": "$stars"}, "n": {"$sum": 1}}},
+    ]).to_list(500)
+    return {r["_id"]: r for r in rows}
+
+
+def _trust_score(stats: Optional[dict]) -> float:
+    total, n = (stats or {}).get("sum", 0), (stats or {}).get("n", 0)
+    return (total + RATING_PRIOR_MEAN * RATING_PRIOR_WEIGHT) / (n + RATING_PRIOR_WEIGHT)
+
+
+@api.post("/encounters/{encounter_id}/rating")
+async def rate_visit(encounter_id: str, body: RatingIn, user=Depends(get_current_user)):
+    enc = await db.encounters.find_one({"encounter_id": encounter_id, "patient_user_id": user["user_id"]}, {"_id": 0})
+    if not enc:
+        raise HTTPException(status_code=404, detail="Visit not found")
+    if enc["status"] != "completed":
+        raise HTTPException(status_code=409, detail="You can rate a visit once the doctor has completed it")
+    doctor = await db.users.find_one({"user_id": enc["doctor_user_id"]}, {"_id": 0, "account_id": 1, "name": 1})
+    account_id = enc.get("account_id") or (doctor or {}).get("account_id")
+    if not account_id:
+        raise HTTPException(status_code=409, detail="This doctor isn't part of a hospital, so there's nothing to rate")
+    existing = await db.hospital_ratings.find_one({"encounter_id": encounter_id}, {"_id": 0})
+    rating = {
+        "rating_id": (existing or {}).get("rating_id") or f"rate_{uuid.uuid4().hex[:12]}",
+        "encounter_id": encounter_id, "account_id": account_id, "doctor_user_id": enc["doctor_user_id"],
+        "doctor_name": (doctor or {}).get("name"), "patient_user_id": user["user_id"],
+        "patient_display": _public_name(user.get("name")), "stars": body.stars, "comment": body.comment.strip(),
+        "hidden": (existing or {}).get("hidden", False), "created_at": (existing or {}).get("created_at") or iso(),
+        "updated_at": iso(),
+    }
+    await db.hospital_ratings.update_one({"encounter_id": encounter_id}, {"$set": rating}, upsert=True)
+    return rating
+
+
+@api.get("/care/hospitals/{account_id}/reviews")
+async def hospital_reviews(account_id: str, user=Depends(get_current_user)):
+    account_id = account_id.upper()
+    rows = await db.hospital_ratings.find({"account_id": account_id, "hidden": False},
+                                          {"_id": 0, "patient_user_id": 0}).sort("updated_at", -1).to_list(200)
+    breakdown = {str(s): sum(1 for r in rows if r["stars"] == s) for s in range(5, 0, -1)}
+    return {"account_id": account_id, "count": len(rows),
+            "average": round(sum(r["stars"] for r in rows) / len(rows), 1) if rows else None,
+            "breakdown": breakdown, "reviews": [r for r in rows if r["comment"]][:30]}
+
+
+async def _ratings_for_account(account_id: str):
+    return await db.hospital_ratings.find({"account_id": account_id}, {"_id": 0, "patient_user_id": 0}
+                                          ).sort("updated_at", -1).to_list(500)
+
+
+async def _set_rating_hidden(rating_id: str, account_id: Optional[str], hidden: bool):
+    query = {"rating_id": rating_id, **({"account_id": account_id} if account_id else {})}
+    result = await db.hospital_ratings.update_one(query, {"$set": {"hidden": hidden, "moderated_at": iso()}})
+    if not result.matched_count:
+        raise HTTPException(status_code=404, detail="Rating not found")
+    return await db.hospital_ratings.find_one({"rating_id": rating_id}, {"_id": 0, "patient_user_id": 0})
+
+
+@api.get("/admin/accounts/{account_id}/ratings")
+async def admin_account_ratings(account_id: str, admin=Depends(require_admin)):
+    return await _ratings_for_account(account_id.upper())
+
+
+@api.patch("/admin/ratings/{rating_id}")
+async def admin_hide_rating(rating_id: str, body: RatingVisibilityIn, admin=Depends(require_admin)):
+    return await _set_rating_hidden(rating_id, None, body.hidden)
+
+
+@api.get("/account/ratings")
+async def my_account_ratings(user=Depends(require_account_admin)):
+    return await _ratings_for_account(user["account_id"])
+
+
+@api.patch("/account/ratings/{rating_id}")
+async def account_hide_rating(rating_id: str, body: RatingVisibilityIn, user=Depends(require_account_admin)):
+    return await _set_rating_hidden(rating_id, user["account_id"], body.hidden)
+
+
+# ---------- Pharmacy portal: products ----------
+CATALOG_COLUMNS = ["sku", "name_en", "name_ar", "generic_name", "form", "strength", "category",
+                   "requires_prescription", "sfda_registration_number", "days_supply", "pack_size", "price_sar",
+                   "stock_status"]
+CATALOG_SAMPLE_ROWS = [
+    ["PARA-500-24", "Paracetamol 500 mg", "باراسيتامول 500 ملغ", "paracetamol", "tablet", "500 mg", "otc", "no", "", "", "24", "9.50", "in_stock"],
+    ["MET-500-60", "Metformin 500 mg", "ميتفورمين 500 ملغ", "metformin", "tablet", "500 mg", "prescription", "yes", "SFDA-12345", "30", "60", "18.75", "low"],
+]
+MAX_IMPORT_BYTES = 1_000_000
+
+
+class CatalogItemIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=60)
+    name_en: str = Field(min_length=2, max_length=160)
+    name_ar: str = Field(default="", max_length=160)
+    generic_name: str = Field(default="", max_length=120)
+    form: str = Field(default="", max_length=60)
+    strength: str = Field(default="", max_length=60)
+    category: str = Field(pattern="^(prescription|otc|supplement|device|personal_care)$")
+    requires_prescription: bool = False
+    sfda_registration_number: str = Field(default="", max_length=60)
+    days_supply: Optional[int] = Field(default=None, ge=1, le=365)
+    pack_size: Optional[int] = Field(default=None, ge=1, le=10000)
+    price_sar: float = Field(gt=0, le=100000)
+    stock_status: str = Field(default="in_stock", pattern="^(in_stock|low|out_of_stock)$")
+    active: bool = True
+
+
+class LicencesIn(BaseModel):
+    sfda_license: Optional[str] = Field(default=None, max_length=60)
+    moh_license: Optional[str] = Field(default=None, max_length=60)
+    cr_number: Optional[str] = Field(default=None, max_length=60)
+
+
+def _catalog_problems(data: dict) -> List[str]:
+    return [v["message"] for v in compliance.check_catalog_item({**data, "is_controlled": False})]
+
+
+async def _upsert_catalog_item(pharmacy_id: str, data: dict, item_id: Optional[str] = None) -> tuple[dict, bool]:
+    data = {**data, "sku": data["sku"].strip(), "name_en": data["name_en"].strip(),
+            "name_ar": (data.get("name_ar") or data["name_en"]).strip(), "is_controlled": False}
+    existing = await db.catalog_items.find_one(
+        {"pharmacy_id": pharmacy_id, **({"item_id": item_id} if item_id else {"sku": data["sku"]})}, {"_id": 0})
+    if item_id and not existing:
+        raise HTTPException(status_code=404, detail="Product not found")
+    if item_id and data["sku"] != existing["sku"] and await db.catalog_items.find_one(
+            {"pharmacy_id": pharmacy_id, "sku": data["sku"], "item_id": {"$ne": item_id}}):
+        raise HTTPException(status_code=409, detail="Another product already uses that SKU")
+    if existing:
+        await db.catalog_items.update_one({"item_id": existing["item_id"]}, {"$set": {**data, "updated_at": iso()}})
+        return await db.catalog_items.find_one({"item_id": existing["item_id"]}, {"_id": 0}), False
+    doc = {"item_id": f"item_{uuid.uuid4().hex[:12]}", "pharmacy_id": pharmacy_id, "image_url": None, **data,
+           "source": "pharmacy_portal", "created_at": iso(), "updated_at": iso()}
+    await db.catalog_items.insert_one(dict(doc))
+    return doc, True
+
+
+@api.get("/pharmacy-portal/catalog")
+async def portal_catalog(q: Optional[str] = None, user=Depends(require_pharmacist)):
+    query = {"pharmacy_id": user["pharmacy_id"]}
+    if q:
+        rx = {"$regex": re.escape(q), "$options": "i"}
+        query["$or"] = [{"name_en": rx}, {"name_ar": rx}, {"sku": rx}, {"generic_name": rx}]
+    items = await db.catalog_items.find(query, {"_id": 0}).sort("name_en", 1).to_list(2000)
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": user["pharmacy_id"]}, {"_id": 0})
+    return {"items": items, "pharmacy_problems": [v["message"] for v in compliance.check_pharmacy(pharmacy)],
+            "licences": {k: (pharmacy or {}).get(k) for k in compliance.REQUIRED_PHARMACY_LICENCES},
+            "columns": CATALOG_COLUMNS}
+
+
+@api.post("/pharmacy-portal/catalog")
+async def portal_add_product(body: CatalogItemIn, user=Depends(require_pharmacist)):
+    problems = _catalog_problems(body.model_dump())
+    if problems:
+        raise HTTPException(status_code=422, detail=" ".join(problems))
+    if await db.catalog_items.find_one({"pharmacy_id": user["pharmacy_id"], "sku": body.sku.strip()}):
+        raise HTTPException(status_code=409, detail="A product with that SKU already exists — edit it instead")
+    item, _ = await _upsert_catalog_item(user["pharmacy_id"], body.model_dump())
+    return item
+
+
+@api.put("/pharmacy-portal/catalog/{item_id}")
+async def portal_edit_product(item_id: str, body: CatalogItemIn, user=Depends(require_pharmacist)):
+    problems = _catalog_problems(body.model_dump())
+    if problems:
+        raise HTTPException(status_code=422, detail=" ".join(problems))
+    item, _ = await _upsert_catalog_item(user["pharmacy_id"], body.model_dump(), item_id)
+    return item
+
+
+@api.get("/pharmacy-portal/catalog/template.csv")
+async def portal_catalog_template(user=Depends(require_pharmacist)):
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(CATALOG_COLUMNS)
+    writer.writerows(CATALOG_SAMPLE_ROWS)
+    return Response(content="\ufeff" + out.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="sihha-products-template.csv"'})
+
+
+def _parse_catalog_row(row: dict) -> dict:
+    clean = {k: (row.get(k) or "").strip() for k in CATALOG_COLUMNS}
+    rx = clean["requires_prescription"].lower()
+    if rx not in ("yes", "no", "true", "false", "1", "0", ""):
+        raise ValueError("requires_prescription must be yes or no")
+    for key in ("days_supply", "pack_size"):
+        if clean[key] and not clean[key].isdigit():
+            raise ValueError(f"{key} must be a whole number")
+    try:
+        price = float(clean["price_sar"].replace(",", ""))
+    except ValueError:
+        raise ValueError("price_sar must be a number, e.g. 12.50")
+    return {**clean, "category": clean["category"].lower() or "otc", "requires_prescription": rx in ("yes", "true", "1"),
+            "days_supply": int(clean["days_supply"]) if clean["days_supply"] else None,
+            "pack_size": int(clean["pack_size"]) if clean["pack_size"] else None,
+            "price_sar": price, "stock_status": clean["stock_status"].lower() or "in_stock"}
+
+
+@api.post("/pharmacy-portal/catalog/import")
+async def portal_import_catalog(file: UploadFile = File(...), user=Depends(require_pharmacist)):
+    raw = await file.read(MAX_IMPORT_BYTES + 1)
+    if len(raw) > MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="The file is larger than 1 MB. Split it into smaller files.")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="Save the spreadsheet as CSV UTF-8 and try again")
+    reader = csv.DictReader(io.StringIO(text))
+    missing = [c for c in ("sku", "name_en", "category", "price_sar") if c not in (reader.fieldnames or [])]
+    if missing:
+        raise HTTPException(status_code=422, detail="Missing columns: " + ", ".join(missing) + ". Start from the template.")
+    created = updated = 0
+    errors = []
+    for line, row in enumerate(reader, start=2):
+        if line > 2001:
+            errors.append({"row": line, "sku": "", "error": "Only the first 2000 products were imported"})
+            break
+        if not any((v or "").strip() for v in row.values()):
+            continue
+        try:
+            data = CatalogItemIn(**_parse_catalog_row(row)).model_dump()
+            problems = _catalog_problems(data)
+            if problems:
+                raise ValueError(" ".join(problems))
+        except ValidationError as e:
+            errors.append({"row": line, "sku": row.get("sku") or "",
+                           "error": "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors())})
+            continue
+        except ValueError as e:
+            errors.append({"row": line, "sku": row.get("sku") or "", "error": str(e)})
+            continue
+        _, is_new = await _upsert_catalog_item(user["pharmacy_id"], data)
+        created, updated = created + is_new, updated + (not is_new)
+    return {"created": created, "updated": updated, "errors": errors}
+
+
+@api.patch("/pharmacy-portal/licences")
+async def portal_update_licences(body: LicencesIn, user=Depends(require_pharmacist)):
+    if user.get("pharmacy_role") != "owner":
+        raise HTTPException(status_code=403, detail="Only the pharmacy owner can change licence numbers")
+    update = {k: v.strip() for k, v in body.model_dump(exclude_none=True).items() if v.strip()}
+    if update:
+        await db.pharmacies.update_one({"pharmacy_id": user["pharmacy_id"]}, {"$set": {**update, "updated_at": iso()}})
+    pharmacy = await db.pharmacies.find_one({"pharmacy_id": user["pharmacy_id"]}, {"_id": 0})
+    return {"licences": {k: pharmacy.get(k) for k in compliance.REQUIRED_PHARMACY_LICENCES},
+            "pharmacy_problems": [v["message"] for v in compliance.check_pharmacy(pharmacy)]}
 
 
 app.include_router(api)
