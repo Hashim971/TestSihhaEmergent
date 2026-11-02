@@ -355,7 +355,14 @@ Answers "does this screening need a visit, and how does it get booked?" plus e-p
 - Investor-ready landing page revamp + /api/demo-requests (admin list at GET /api/admin/demo-requests, no UI yet).
 - Tests: iteration_13–16 all passing.
 
+## Jun 2026 — Admin Users tab + chat fixes
+- Super admin /admin/users: search, role/status filters, last sign-in/active, detail modal with activity counts, suspend/re-enable (blocks login, refresh, Google, all API calls), mark demo/real.
+- Demo/test accounts (emails ending sihha.ai, .demo, @example.com, @test.com, @resend.dev, or is_demo=true) hidden from Users list and Overview counts; explicit is_demo flag overrides.
+- Chat: per-turn language lock to the patient's latest message, 1-2 sentence replies, ~4 questions (hard cap 6 incl. greeting), no repeated questions; session persisted in sessionStorage + auto-reopen; 401 refresh on streaming; New Screening race fixed (inputs disabled while opening).
+- Admin modals render via portal. Tested: iteration_25 + iteration_26 (100%).
+
 ## Backlog
+- P1: Owner to mark remaining personal test @gmail accounts as Demo in /admin/users (preview shows 10 "real").
 - P1: Demo requests inbox UI in super admin; native App Store / Play Store wrapper (Capacitor) when ready
 - P1: Week View, Vitals Trend Warnings, Pharmacist Inbox, Pharmacy Ad Console
 - P2: Unleash integration if external flag management is ever needed; per-tenant Arabic UI (RTL)

@@ -39,7 +39,10 @@ export default function HealthChat() {
     }
   };
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  useEffect(() => {
+    const box = endRef.current?.parentElement;
+    if (box) box.scrollTo({ top: box.scrollHeight, behavior: "smooth" });
+  }, [messages]);
 
   const loadSessions = useCallback(async () => {
     const res = await api.get("/chat/sessions");

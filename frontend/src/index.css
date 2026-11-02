@@ -39,7 +39,7 @@ body {
   margin: 0;
   background: #fbfbf9;
   color: #1a1a1a;
-  font-family: "IBM Plex Sans", sans-serif;
+  font-family: "IBM Plex Sans", "IBM Plex Sans Arabic", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
