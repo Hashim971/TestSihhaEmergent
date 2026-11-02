@@ -151,7 +151,7 @@ def test_patient_unread_messages(solo, pharm):
 def test_invite_pending_applicant_conflict(admin):
     email = f"test_pharm_pend_{uuid.uuid4().hex[:6]}@example.com"
     r = requests.post(f"{API}/pharmacy-portal/apply", json={
-        "pharmacy_name": "TEST_ Pending", "city": "Riyadh", "sfda_license": "SFDA-9", "name": "TEST_ P",
+        "pharmacy_name": "TEST_ Pending", "city": "Riyadh", "sfda_license": "SFDA-9", "moh_license": "MOH-1", "cr_number": "CR-1", "name": "TEST_ P",
         "phone": "0500000000", "email": email, "password": "Test@1234"})
     assert r.status_code == 200, r.text
     CREATED["apps"].append(r.json()["application_id"])

@@ -20,7 +20,11 @@ export function VitalLimitsEditor({ patientId, data, onChange }) {
     e.preventDefault();
     setBusy(true);
     try {
-      const body = { note, ...Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v === "" ? null : Number(v)])) };
+      const base = initial();
+      const custom = data.limits || {};
+      // Only send limits the doctor changed or had already customised, so untouched metrics stay standard.
+      const body = { note, ...Object.fromEntries(Object.entries(form).map(([k, v]) => [k,
+        v === "" || (Number(v) === Number(base[k]) && custom[k] == null) ? null : Number(v)])) };
       const { data: next } = await api.put(`/doctor/patients/${patientId}/vital-limits`, body);
       onChange(next);
       setOpen(false);

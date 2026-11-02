@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 21: tested vitals trend warnings + doctor per-patient limits, hospital ratings (completion alert, rate/edit, reviews, Bayesian trust sort, admin + account-admin moderation), pharmacy portal products (CSV template/import with row errors, 413/422, add/edit, duplicate SKU 409, Rx compliance), licences (owner-only PATCH), pharmacy application MOH/CR fields. Backend: 23/24 new tests passed; the 1 failure is a pre-existing IDOR in profile_key that the new /api/vitals/trends endpoint also has. Regressions (iter19 + iter20 suites) all pass, 29 passed and 1 skipped, after I updated the old apply payloads to include the newly required moh_license/cr_number. UI passed for: dashboard trends card, rate-visit dialog (create and edit), Find Care rating and reviews dialog, doctor trends with limits editor (save/invalid toast/reset), admin and My Hospital Ratings tabs (hide/show), products page (template download, CSV upload result with import-error rows, add, duplicate toast, edit refresh, Rx required fields), licences card, apply form, Arabic products page, and 390px mobile (products table scrolls inside its card, no page overflow; trends stack). Emails to @sihha.ai fail as 'undeliverable' in the logs and cause no server error.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/vitals/trends?profile_id=<other user_id> (also GET /api/vitals, /api/vitals/latest, POST /api/vitals)", "issue": "IDOR: profile_key() returns any profile_id as-is without checking it is the caller or one of their dependents. Patient B read patient A's 7 readings and trend series. POST /api/vitals with another user's profile_id writes vitals into their record and recomputes their trends. Pre-existing helper, but the new trends endpoint exposes health data the same way.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "PUT /api/doctor/patients/{id}/vital-limits", "issue": "min>=max is only checked when both values are sent. Sending diastolic_max=60 alone (the standard min is 60) gives an effective min == max with no 422."},
+      {"endpoint": "_hospital_cards top_rated", "issue": "top_rated uses the rounded rating_avg, so an average of 4.45 rounds to 4.5 and gets the badge. Compare the raw sum/n instead."},
+      {"endpoint": "POST /api/pharmacy-portal/catalog/import", "issue": "The CSV has no 'active' column, so re-uploading a SKU forces active=True. A product the pharmacist had deactivated silently comes back for patients."},
+      {"endpoint": "GET /api/care/hospitals/{id}/reviews", "issue": "Does not check that the account is listed or not suspended. Reviews of unlisted accounts can be read by ID."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "VitalLimitsEditor", "issue": "Save sends every prefilled field (the standard 60/90 and 70/126 values). Changing only systolic marks diastolic and glucose as limit_source 'doctor' / 'set by your doctor' too. Send only the values the doctor changed, or leave fields empty unless edited.", "selector": "[data-testid='vital-limits-save']", "priority": "MEDIUM"},
+      {"component": "HospitalReviews breakdown", "issue": "Star breakdown shows 1→5 top to bottom: JS orders integer-like object keys ascending. Usually 5 stars goes on top. Sort the entries in descending order.", "selector": "[data-testid='hospital-reviews-dialog']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Doctor patient view – doctor-vital-trends", "issues": ["Copy is written for the patient: 'within your limits', 'your last 2 readings', 'set by your doctor' is shown to the doctor."]},
+      {"screen": "Trend cards with no readings", "issues": ["A green 'Within limits' badge shows even when there are no readings in 14 days. Show a neutral 'No data' state instead."]},
+      {"screen": "Arabic dashboard trends", "issues": ["Metric labels (Systolic blood pressure / Diastolic / Blood sugar) and the trend messages come from the backend in English and are not translated.", "The summary '1 need attention' is only half-translated because the template string is built in JS.", "'1 ratings' in the reviews summary should be singular."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter21_trends_ratings_products.py", "/app/backend/tests/iter21_ui_seed.py", "/app/test_reports/pytest/iter21.xml"],
+  "action_items": [
+    "HIGH: validate profile_id in profile_key() (or in the vitals/trends routes). Allow only the caller's user_id or a dependent they own, otherwise return 403/404.",
+    "Make VitalLimitsEditor send only the limits the doctor changed, so limit_source stays 'standard' for metrics left untouched.",
+    "Compute top_rated from the unrounded average.",
+    "Keep the existing active flag on CSV re-import (or add an 'active' column).",
+    "Translate trend labels/messages for Arabic (send metric keys and let the frontend translate) and the 'N need attention' string. Reverse the order of the star breakdown.",
+    "Use doctor-facing wording in doctor-vital-trends, and show a no-data state on trend cards with no readings."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 5,368 lines. New features were again appended to the monolith; consider splitting into routers (vitals_trends, ratings, pharmacy_portal_products).",
+    "notify_vital_trends uses next(o for o in CORS_ORIGINS if o.startswith('https://')) with no default. If CORS_ORIGINS has no https origin this raises StopIteration and POST /api/vitals fails with a 500. Use a PUBLIC_APP_URL env var instead.",
+    "notify_vital_trends runs a 14-day query and up to 3 Mongo lookups on every POST /api/vitals call. Acceptable for now, but simulate_vitals-style bulk inserts should call it only once (they do)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter21_trends_ratings_products.py", "/app/backend/tests/iter21_ui_seed.py", "/app/backend/tests/test_iter19_findcare_pharmacy_portal.py (added moh_license/cr_number to apply payloads)", "/app/backend/tests/test_iter20_retest_fixes.py (same)"],
+  "success_rate": {"backend": "96% (23/24 new; regressions 29/29 plus 1 skipped)", "frontend": "92% (all flows work; 2 minor UI bugs, i18n gaps)"},
+  "seed_data_creation": "Temporary: TEST_ patients, encounters, ratings, vitals (source TEST_ui), catalog items TEST_*, pharmacy application. All cleaned up (python iter21_ui_seed.py cleanup + pytest teardown). omar stays on Al Noor with dr.layla, solo is standalone, the pharmacist is owner again, and Al Dawaa licences are unchanged.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run pytest test_iter21_trends_ratings_products.py; it registers its own TEST_ patients and cleans up. test_trends_profile_id_idor fails until profile_key is fixed. For UI: python iter21_ui_seed.py creates a completed Al Noor visit for omar (rate-visit-{id}). Post 2 vitals with systolic>140 and source 'TEST_ui' for omar to see above_limit. Then run 'python iter21_ui_seed.py cleanup'. The doctor patient detail opens by clicking the patient in /doctor/patients (the /doctor/patients/:id URL is not a route). Close Modals with [data-testid='<modal>-close']; Escape does not close them. The Super Admin ratings tab is at /admin/accounts/ACC-12AFFE then account-tab-ratings. Layla's tab is my-hospital-tab-ratings.",
+  "rca of the issue": "IDOR: profile_key(user, profile_id) at server.py:683 returns profile_id unchanged when it is set. It never checks db.dependents for {dependent_id: profile_id, owner user_id}. Repro: log in as patient B, GET /api/vitals/trends?profile_id=<patient A user_id> returns A's series. Fix: make profile_key async and verify ownership, or add a check helper to every vitals/trends route."
+}

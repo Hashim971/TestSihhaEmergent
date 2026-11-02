@@ -157,6 +157,8 @@ async def get_current_user(request: Request):
     user = await db.users.find_one({"user_id": payload["sub"]}, USER_PROJECTION)
     if not user or token_predates_password_change(payload, user):
         raise HTTPException(status_code=401, detail="User not found")
+    user["_dependent_ids"] = [d["dependent_id"] for d in await db.dependents.find(
+        {"user_id": user["user_id"]}, {"_id": 0, "dependent_id": 1}).to_list(50)]
     return with_capabilities(user)
 
 
@@ -681,7 +683,12 @@ async def delete_dependent(dependent_id: str, user=Depends(get_current_user)):
 
 
 def profile_key(user, profile_id: Optional[str]):
-    return profile_id if profile_id and profile_id != "self" else user["user_id"]
+    """The caller's own record or one of their dependents — never anyone else's."""
+    if not profile_id or profile_id in ("self", user["user_id"]):
+        return user["user_id"]
+    if profile_id not in user.get("_dependent_ids", ()):
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile_id
 
 
 # ---------- Vitals ----------
@@ -729,11 +736,12 @@ async def check_vital_alerts(user_id, profile, vital):
 
 # ---------- Vitals trend warnings ----------
 TREND_METRICS = {
-    "systolic": {"label": "Systolic blood pressure", "unit": "mmHg", "max": 140, "min": 90, "step": 5},
-    "diastolic": {"label": "Diastolic blood pressure", "unit": "mmHg", "max": 90, "min": 60, "step": 4},
-    "glucose": {"label": "Blood sugar", "unit": "mg/dL", "max": 126, "min": 70, "step": 10},
+    "systolic": {"label": "Systolic blood pressure", "label_ar": "ضغط الدم الانقباضي", "unit": "mmHg", "max": 140, "min": 90, "step": 5},
+    "diastolic": {"label": "Diastolic blood pressure", "label_ar": "ضغط الدم الانبساطي", "unit": "mmHg", "max": 90, "min": 60, "step": 4},
+    "glucose": {"label": "Blood sugar", "label_ar": "سكر الدم", "unit": "mg/dL", "max": 126, "min": 70, "step": 10},
 }
-TREND_SEVERITY = {"above_limit": "warning", "below_limit": "warning", "rising": "info", "falling": "info", "ok": None}
+TREND_SEVERITY = {"above_limit": "warning", "below_limit": "warning", "rising": "info", "falling": "info", "ok": None,
+                  "no_data": None}
 
 
 class VitalLimitsIn(BaseModel):
@@ -751,18 +759,26 @@ def _avg(values):
 
 
 def _trend_status(spec: dict, limit: dict, last3: list, recent_avg, change):
-    label, unit = spec["label"], spec["unit"]
+    """Returns (status, English message, Arabic message). Wording is neutral so it reads right for patient and doctor."""
+    label, ar, unit = spec["label"], spec["label_ar"], spec["unit"]
+    if not last3:
+        return "no_data", f"No {label.lower()} readings in the last 14 days.", f"لا توجد قراءات لـ{ar} خلال آخر 14 يوماً."
     high = sum(1 for v in last3 if v > limit["max"])
     low = sum(1 for v in last3 if v < limit["min"])
-    if len(last3) >= 2 and high >= 2:
-        return "above_limit", f"{label} was above {limit['max']:g} {unit} in {high} of your last {len(last3)} readings."
-    if len(last3) >= 2 and low >= 2:
-        return "below_limit", f"{label} was below {limit['min']:g} {unit} in {low} of your last {len(last3)} readings."
+    n = len(last3)
+    if n >= 2 and high >= 2:
+        return ("above_limit", f"{label} was above {limit['max']:g} {unit} in {high} of the last {n} readings.",
+                f"كان {ar} أعلى من {limit['max']:g} {unit} في {high} من آخر {n} قراءات.")
+    if n >= 2 and low >= 2:
+        return ("below_limit", f"{label} was below {limit['min']:g} {unit} in {low} of the last {n} readings.",
+                f"كان {ar} أقل من {limit['min']:g} {unit} في {low} من آخر {n} قراءات.")
     if change is not None and change >= spec["step"] and recent_avg >= limit["max"] - 2 * spec["step"]:
-        return "rising", f"{label} is trending up: {recent_avg:g} {unit} on average this week, up {change:g} from last week."
+        return ("rising", f"{label} is trending up: {recent_avg:g} {unit} on average this week, up {change:g} from last week.",
+                f"{ar} في ارتفاع: متوسط {recent_avg:g} {unit} هذا الأسبوع، بزيادة {change:g} عن الأسبوع الماضي.")
     if change is not None and change <= -spec["step"] and recent_avg <= limit["min"] + spec["step"]:
-        return "falling", f"{label} is trending down: {recent_avg:g} {unit} on average this week, down {abs(change):g} from last week."
-    return "ok", f"{label} is within your limits."
+        return ("falling", f"{label} is trending down: {recent_avg:g} {unit} on average this week, down {abs(change):g} from last week.",
+                f"{ar} في انخفاض: متوسط {recent_avg:g} {unit} هذا الأسبوع، بانخفاض {abs(change):g} عن الأسبوع الماضي.")
+    return "ok", f"{label} is within the limits.", f"{ar} ضمن الحدود."
 
 
 async def compute_vital_trends(profile_id: str) -> dict:
@@ -778,11 +794,11 @@ async def compute_vital_trends(profile_id: str) -> dict:
         recent_avg = _avg([v for t, v in points if t >= mid])
         previous_avg = _avg([v for t, v in points if t < mid])
         change = round(recent_avg - previous_avg, 1) if recent_avg is not None and previous_avg is not None else None
-        status, message = _trend_status(spec, limit, [v for _, v in points[-3:]], recent_avg, change)
+        status, message, message_ar = _trend_status(spec, limit, [v for _, v in points[-3:]], recent_avg, change)
         trends.append({
-            "metric": metric, "label": spec["label"], "unit": spec["unit"], "limit": limit, "limit_source": source,
-            "recent_avg": recent_avg, "previous_avg": previous_avg, "change": change, "status": status,
-            "severity": TREND_SEVERITY[status], "message": message if points else f"No {spec['label'].lower()} readings in the last 14 days.",
+            "metric": metric, "label": spec["label"], "label_ar": spec["label_ar"], "unit": spec["unit"], "limit": limit,
+            "limit_source": source, "recent_avg": recent_avg, "previous_avg": previous_avg, "change": change,
+            "status": status, "severity": TREND_SEVERITY[status], "message": message, "message_ar": message_ar,
             "readings": len(points), "series": [{"at": t, "value": v} for t, v in points[-30:]],
         })
     return {"trends": trends, "limits": {k: v for k, v in doc.items() if k != "profile_id"} or None}
@@ -791,7 +807,7 @@ async def compute_vital_trends(profile_id: str) -> dict:
 async def notify_vital_trends(user: dict, profile_id: str):
     """Alert + email once per metric and status per 24h, to the patient and their doctor."""
     result = await compute_vital_trends(profile_id)
-    flagged = [t for t in result["trends"] if t["status"] != "ok"]
+    flagged = [t for t in result["trends"] if t["severity"]]
     if not flagged:
         return
     doctor = None
@@ -821,7 +837,7 @@ async def notify_vital_trends(user: dict, profile_id: str):
             _send_in_background(user["user_id"], user["email"], subject, html)
         if doctor and doctor.get("email"):
             subject, html = notice_email(doctor.get("name") or "Doctor", f"{subject_name}: {headline}",
-                                         t["message"].replace("your last", "their last"), f"{origin}/doctor/patients", "Open patient")
+                                         t["message"], f"{origin}/doctor/patients", "Open patient")
             _send_in_background(doctor["user_id"], doctor["email"], subject, html)
 
 
@@ -4498,7 +4514,7 @@ async def _hospital_cards(query: dict) -> List[dict]:
         st = stats.get(a["account_id"])
         card.update(rating_avg=round(st["sum"] / st["n"], 1) if st else None, rating_count=st["n"] if st else 0,
                     trust_score=round(_trust_score(st), 3))
-        card["top_rated"] = card["rating_count"] >= 3 and card["rating_avg"] >= 4.5
+        card["top_rated"] = bool(st) and st["n"] >= 3 and st["sum"] / st["n"] >= 4.5
         cards.append(card)
     return cards
 
@@ -5024,9 +5040,10 @@ async def doctor_vital_trends(patient_id: str, user=Depends(require_doctor)):
 async def set_vital_limits(patient_id: str, body: VitalLimitsIn, user=Depends(require_doctor)):
     await assert_doctor_can_access_patient(db, user, patient_id)
     values = body.model_dump()
-    for metric in TREND_METRICS:
-        lo, hi = values.get(f"{metric}_min"), values.get(f"{metric}_max")
-        if lo is not None and hi is not None and lo >= hi:
+    for metric, spec in TREND_METRICS.items():
+        lo = values.get(f"{metric}_min") or spec["min"]
+        hi = values.get(f"{metric}_max") or spec["max"]
+        if lo >= hi:
             raise HTTPException(status_code=422, detail=f"The lower {metric} limit must be below the upper one")
     await db.vital_limits.update_one({"profile_id": patient_id}, {"$set": {
         **values, "profile_id": patient_id, "set_by": user["user_id"], "set_by_name": user["name"], "updated_at": iso()}},
@@ -5098,6 +5115,8 @@ async def rate_visit(encounter_id: str, body: RatingIn, user=Depends(get_current
 @api.get("/care/hospitals/{account_id}/reviews")
 async def hospital_reviews(account_id: str, user=Depends(get_current_user)):
     account_id = account_id.upper()
+    if not await db.accounts.find_one({"account_id": account_id, "listed_in_app": True, "status": {"$ne": "suspended"}}):
+        raise HTTPException(status_code=404, detail="Hospital not found")
     rows = await db.hospital_ratings.find({"account_id": account_id, "hidden": False},
                                           {"_id": 0, "patient_user_id": 0}).sort("updated_at", -1).to_list(200)
     breakdown = {str(s): sum(1 for r in rows if r["stars"] == s) for s in range(5, 0, -1)}
@@ -5142,10 +5161,10 @@ async def account_hide_rating(rating_id: str, body: RatingVisibilityIn, user=Dep
 # ---------- Pharmacy portal: products ----------
 CATALOG_COLUMNS = ["sku", "name_en", "name_ar", "generic_name", "form", "strength", "category",
                    "requires_prescription", "sfda_registration_number", "days_supply", "pack_size", "price_sar",
-                   "stock_status"]
+                   "stock_status", "active"]
 CATALOG_SAMPLE_ROWS = [
-    ["PARA-500-24", "Paracetamol 500 mg", "باراسيتامول 500 ملغ", "paracetamol", "tablet", "500 mg", "otc", "no", "", "", "24", "9.50", "in_stock"],
-    ["MET-500-60", "Metformin 500 mg", "ميتفورمين 500 ملغ", "metformin", "tablet", "500 mg", "prescription", "yes", "SFDA-12345", "30", "60", "18.75", "low"],
+    ["PARA-500-24", "Paracetamol 500 mg", "باراسيتامول 500 ملغ", "paracetamol", "tablet", "500 mg", "otc", "no", "", "", "24", "9.50", "in_stock", "yes"],
+    ["MET-500-60", "Metformin 500 mg", "ميتفورمين 500 ملغ", "metformin", "tablet", "500 mg", "prescription", "yes", "SFDA-12345", "30", "60", "18.75", "low", "yes"],
 ]
 MAX_IMPORT_BYTES = 1_000_000
 
@@ -5254,7 +5273,7 @@ def _parse_catalog_row(row: dict) -> dict:
     return {**clean, "category": clean["category"].lower() or "otc", "requires_prescription": rx in ("yes", "true", "1"),
             "days_supply": int(clean["days_supply"]) if clean["days_supply"] else None,
             "pack_size": int(clean["pack_size"]) if clean["pack_size"] else None,
-            "price_sar": price, "stock_status": clean["stock_status"].lower() or "in_stock"}
+            "price_sar": price, "stock_status": clean["stock_status"].lower() or "in_stock", "active": True}
 
 
 @api.post("/pharmacy-portal/catalog/import")
@@ -5276,10 +5295,16 @@ async def portal_import_catalog(file: UploadFile = File(...), user=Depends(requi
         if line > 2001:
             errors.append({"row": line, "sku": "", "error": "Only the first 2000 products were imported"})
             break
-        if not any((v or "").strip() for v in row.values()):
+        if not any((v or "").strip() for v in row.values() if isinstance(v, str)):
             continue
         try:
             data = CatalogItemIn(**_parse_catalog_row(row)).model_dump()
+            if not (row.get("active") or "").strip():
+                current = await db.catalog_items.find_one({"pharmacy_id": user["pharmacy_id"], "sku": data["sku"]},
+                                                          {"_id": 0, "active": 1})
+                data["active"] = current["active"] if current else True
+            else:
+                data["active"] = row["active"].strip().lower() in ("yes", "true", "1")
             problems = _catalog_problems(data)
             if problems:
                 raise ValueError(" ".join(problems))

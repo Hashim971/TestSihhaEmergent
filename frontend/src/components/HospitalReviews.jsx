@@ -14,11 +14,11 @@ export function HospitalReviews({ hospital, onClose }) {
         <>
           <div className="flex items-center gap-3 mt-2">
             <Stars value={data.average} size="h-5 w-5" />
-            <span className="text-sm" data-testid="reviews-summary">{data.average ? <><bdi>{data.average}</bdi> · <bdi>{data.count}</bdi> ratings</> : "No ratings yet"}</span>
+            <span className="text-sm" data-testid="reviews-summary">{data.average ? <><bdi>{data.average}</bdi> · <bdi>{data.count}</bdi> {data.count === 1 ? "rating" : "ratings"}</> : "No ratings yet"}</span>
           </div>
           {data.count > 0 && (
             <div className="mt-3 space-y-1">
-              {Object.entries(data.breakdown).map(([s, n]) => (
+              {Object.entries(data.breakdown).sort((a, b) => Number(b[0]) - Number(a[0])).map(([s, n]) => (
                 <div key={s} className="flex items-center gap-2 text-xs">
                   <span className="w-3">{s}</span>
                   <div className="flex-1 h-2 rounded-full bg-sand overflow-hidden"><div className="h-full bg-amber-400" style={{ width: `${(n / data.count) * 100}%` }} /></div>

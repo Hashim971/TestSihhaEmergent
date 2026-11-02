@@ -198,7 +198,7 @@ class TestPortalOnboarding:
         for tag in ("ok", "no"):
             email = f"test_pharm_{tag}_{uuid.uuid4().hex[:6]}@example.com"
             r = requests.post(f"{API}/pharmacy-portal/apply", json={
-                "pharmacy_name": f"TEST_ Pharmacy {tag}", "city": "Riyadh", "sfda_license": "SFDA-123",
+                "pharmacy_name": f"TEST_ Pharmacy {tag}", "city": "Riyadh", "sfda_license": "SFDA-123", "moh_license": "MOH-1", "cr_number": "CR-1",
                 "name": "TEST_ Owner", "phone": "0500000000", "email": email, "password": "Test@1234"})
             assert r.status_code == 200, r.text
             CREATED["apps"].append(r.json()["application_id"])
@@ -223,7 +223,7 @@ class TestPortalOnboarding:
 
     def test_duplicate_email_apply(self):
         r = requests.post(f"{API}/pharmacy-portal/apply", json={
-            "pharmacy_name": "TEST_ dup", "city": "Riyadh", "sfda_license": "SFDA-1", "name": "x",
+            "pharmacy_name": "TEST_ dup", "city": "Riyadh", "sfda_license": "SFDA-1", "moh_license": "MOH-1", "cr_number": "CR-1", "name": "x",
             "email": "solo.patient@sihha.ai", "password": "Test@1234"})
         assert r.status_code in (400, 429)
 

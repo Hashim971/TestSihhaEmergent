@@ -72,7 +72,7 @@ export default function DoctorPortal() {
         </div>
 
         {trends && (
-          <VitalTrends data={trends} testid="doctor-vital-trends"
+          <VitalTrends data={trends} testid="doctor-vital-trends" audience="doctor"
             footer={<VitalLimitsEditor key={selected.user_id} patientId={selected.user_id} data={trends} onChange={setTrends} />} />
         )}
 

@@ -1,4 +1,8 @@
 {
+"No data": "لا توجد بيانات",
+"rating": "تقييم",
+"custom for this patient": "مخصص لهذا المريض",
+"Compares the last 7 days with the 7 before. The patient and their assigned doctor get an alert and email when a warning starts.": "يقارن آخر 7 أيام بالأيام السبعة التي قبلها. يتلقى المريض وطبيبه المعالج تنبيهاً وبريداً إلكترونياً عند بدء أي تحذير.",
 "!n.flag || isOn(n.flag)).map((": "!n.flag || isOn(n.flag)).map((",
 "% · affects": "% · يؤثر على",
 "(ci === i ?": "(ci === i ?",
