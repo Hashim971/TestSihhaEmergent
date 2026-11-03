@@ -29,3 +29,8 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# Local virtualenv and Python caches
+backend/.venv/
+__pycache__/
+*.pyc
